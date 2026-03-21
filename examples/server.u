@@ -1,0 +1,111 @@
+// server.u — веб-сервер
+// memory(auto) явно → проект, use обязателен
+memory(auto)
+
+use std.db: Sqlite, Database
+use std.http: Http, Router, Request, Response
+use std.io: print
+
+struct Todo
+    id: Int
+    title: String
+    done: Bool
+end
+
+struct CreateRequest
+    title: String
+end
+
+struct App
+    db: Database
+end
+
+fn init_db(db)
+    db::exec("
+        create table if not exists todos (
+            id integer primary key autoincrement,
+            title text not null,
+            done boolean default false
+        )
+    ")?
+end
+
+fn row_to_todo(row)
+    return Todo(
+        id: row.int("id"),
+        title: row.string("title"),
+        done: row.bool("done"),
+    )
+end
+
+fn get_all_todos(db)
+    rows = db.query("select id, title, done from todos")?
+    return rows.map(row_to_todo)
+end
+
+fn create_todo(db, title)
+    db::exec("insert into todos (title) values ($1)", title)?
+    id = db.last_insert_id()
+    return Todo(id: id, title: title, done: false)
+end
+
+fn toggle_todo(db, id)
+    db::exec("update todos set done = not done where id = $1", id)?
+    row = db.query_one("select id, title, done from todos where id = $1", id)?
+    return row_to_todo(row)
+end
+
+fn delete_todo(db, id)
+    db::exec("delete from todos where id = $1", id)?
+end
+
+fn App.handle_list(self, request)
+    todos = get_all_todos(self.db)?
+    return Response.json(todos)
+end
+
+fn App.handle_create(self, request)
+    body = request.json(CreateRequest)?
+    if body.title.trim().is_empty()
+        return Response.error(400, "title is required")
+    end
+    todo = create_todo(self.db, body.title)?
+    return Response.json(todo, status: 201)
+end
+
+fn App.handle_toggle(self, request)
+    id = request.param("id").int()?
+    todo = toggle_todo(self.db, id)?
+    return Response.json(todo)
+end
+
+fn App.handle_delete(self, request)
+    id = request.param("id").int()?
+    delete_todo(self.db, id)?
+    return Response.ok(204)
+end
+
+fn App.handle_connection(self, conn)
+    request = conn.read_request()?
+    response = self.router.dispatch(request)?
+    conn.write(response)
+end
+
+// Точка входа
+db = Sqlite.open("todos.db")?
+init_db(db)?
+
+app = App(db: db)
+router = Router.new()
+router::get("/todos",       app.handle_list)
+router::post("/todos",      app.handle_create)
+router::patch("/todos/:id", app.handle_toggle)
+router::delete("/todos/:id", app.handle_delete)
+
+server = Http.listen(":8080")?
+print("Сервер запущен на http://localhost:8080")
+
+loop
+    conn = server.accept()?
+    spawn app.handle_connection(conn)
+end

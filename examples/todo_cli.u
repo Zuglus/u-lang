@@ -1,0 +1,64 @@
+// todo.u — CLI-утилита
+// Нет memory(...) → скрипт, стандартная библиотека доступна
+
+struct Todo
+    id: Int
+    title: String
+    done: Bool
+end
+
+fn init_db()
+    db = Sqlite.open("todos.db")?
+    db::exec("
+        create table if not exists todos (
+            id integer primary key autoincrement,
+            title text not null,
+            done boolean default false
+        )
+    ")?
+    return db
+end
+
+fn list_todos(db)
+    todos = db.query("select id, title, done from todos")?
+    if todos.is_empty()
+        print("Нет задач")
+        return
+    end
+    for row in todos
+        mark = if row.bool("done") "[x]" else "[ ]" end
+        print("$(row.int("id")). $mark $(row.string("title"))")
+    end
+end
+
+fn add_todo(db, title)
+    db::exec("insert into todos (title) values ($1)", title)?
+    print("Добавлено: $title")
+end
+
+fn done_todo(db, id)
+    db::exec("update todos set done = true where id = $1", id)?
+    print("Выполнено: #$id")
+end
+
+fn remove_todo(db, id)
+    db::exec("delete from todos where id = $1", id)?
+    print("Удалено: #$id")
+end
+
+// Точка входа — код сверху вниз
+db = init_db()?
+args = Args.parse()
+
+match args.command
+    "list":   list_todos(db)?
+    "add":    add_todo(db, args.require("title")?)?
+    "done":   done_todo(db, args.require("id")?.int()?)?
+    "remove": remove_todo(db, args.require("id")?.int()?)?
+    _:
+        print("Использование: todo <list|add|done|remove>")
+        print("  todo list")
+        print("  todo add \"Купить молоко\"")
+        print("  todo done 1")
+        print("  todo remove 1")
+end

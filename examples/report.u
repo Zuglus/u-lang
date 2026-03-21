@@ -1,0 +1,12 @@
+// report.u — скрипт обработки данных
+// Нет memory(...) → скрипт, всё доступно автоматически
+
+data = parse_csv(read_file("workers.csv")?)
+
+by_dept = data
+    .group_by(fn(row) row.string("department"))
+    .map_values(fn(rows) rows.avg(fn(r) r.float("salary")))
+
+for (dept, avg) in by_dept
+    print("$dept: средняя зарплата $(avg.round(2))")
+end
