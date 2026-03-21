@@ -1,0 +1,10 @@
+[package]
+name = "u-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime library for the U programming language"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Pin zerocopy to avoid AVX512 issue on nightly
+zerocopy = "=0.8.14"

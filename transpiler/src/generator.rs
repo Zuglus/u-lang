@@ -31,7 +31,8 @@ fn map_type(t: &str) -> &str {
 pub fn generate(program: &Program) -> String {
     let ctx = Ctx::from_program(program);
     let mut out = String::new();
-    out.push_str("#![allow(unused_mut, unused_variables, dead_code)]\n\n");
+    out.push_str("#![allow(unused_mut, unused_variables, dead_code, unused_imports)]\n");
+    out.push_str("use u_runtime::*;\n\n");
 
     // struct/type/fn defs go outside main
     for stmt in &program.statements {
@@ -44,13 +45,13 @@ pub fn generate(program: &Program) -> String {
         }
     }
 
-    out.push_str("fn main() {\n");
+    out.push_str("fn main() -> Result<(), Box<dyn std::error::Error>> {\n");
     for stmt in &program.statements {
         if !matches!(stmt, Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. }) {
             gen_stmt(stmt, &mut out, 1, &ctx);
         }
     }
-    out.push_str("}\n");
+    out.push_str("    Ok(())\n}\n");
     out
 }
 
