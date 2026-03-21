@@ -8,7 +8,7 @@ statement = { struct_def | type_def | fn_def | for_loop | if_stmt | match_stmt
 
 struct_def  = { struct_kw ~ identifier ~ NEWLINE+ ~ (typed_field ~ NEWLINE+)* ~ end_kw }
 type_def    = { type_kw ~ identifier ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
-fn_def      = { fn_kw ~ identifier ~ "(" ~ param_list? ~ ")" ~ NEWLINE+ ~ block ~ end_kw }
+fn_def      = { fn_kw ~ identifier ~ "(" ~ fn_params? ~ ")" ~ fn_ret? ~ NEWLINE+ ~ block ~ end_kw }
 for_loop    = { for_kw ~ for_pattern ~ in_kw ~ expression ~ NEWLINE+ ~ block ~ end_kw }
 if_stmt     = { if_kw ~ expression ~ NEWLINE+ ~ block ~ elif_clause* ~ else_clause? ~ end_kw }
 match_stmt  = { match_kw ~ expression ~ NEWLINE+ ~ (match_arm ~ NEWLINE+)* ~ end_kw }
@@ -17,15 +17,22 @@ mutation_stmt = { operand ~ "::" ~ identifier ~ "=" ~ expression }
 assignment  = { identifier ~ "=" ~ expression }
 expr_stmt   = { expression }
 
+// Function params with optional types
+fn_params = { fn_param ~ ("," ~ fn_param)* }
+fn_param  = { identifier ~ (":" ~ identifier)? }
+fn_ret    = { ":" ~ identifier }
+
 // Struct / type fields
 typed_field  = { identifier ~ ":" ~ identifier }
 type_variant = { identifier ~ "(" ~ typed_field ~ ("," ~ typed_field)* ~ ")" }
 
-// Match
-match_arm     = { match_pattern ~ ":" ~ match_arm_body }
-match_pattern = { identifier ~ "(" ~ match_bindings? ~ ")" }
-match_bindings = { identifier ~ ("," ~ identifier)* }
-match_arm_body = _{ return_stmt | assignment | expr_stmt }
+// Match — supports variant, string, and wildcard patterns
+match_arm       = { match_pattern ~ ":" ~ match_arm_body }
+match_pattern   = { variant_pattern | string_literal | match_wildcard }
+variant_pattern = { identifier ~ "(" ~ match_bindings? ~ ")" }
+match_bindings  = { identifier ~ ("," ~ identifier)* }
+match_wildcard  = @{ "_" ~ !(LETTER | ASCII_DIGIT | "_") }
+match_arm_body  = _{ return_stmt | assignment | expr_stmt }
 
 // Blocks and patterns
 block         = { (statement ~ NEWLINE+)* }
@@ -71,11 +78,12 @@ arg_list      = { expression ~ ("," ~ expression)* }
 
 // String with interpolation
 string_literal = ${ "\"" ~ string_part* ~ "\"" }
-string_part    =  { interp_expr | interp_var | string_text }
+string_part    =  { interp_expr | interp_var | string_text | dollar_lit }
 interp_expr    = ${ "$(" ~ interp_raw ~ ")" }
 interp_raw     = @{ (!")" ~ !"(" ~ ANY | "(" ~ interp_raw ~ ")")* }
 interp_var     = ${ "$" ~ identifier }
 string_text    = @{ (!("\"" | "$") ~ ANY)+ }
+dollar_lit     = @{ "$" }
 
 // Entry point for re-parsing interpolation expressions outside compound-atomic context
 expression_entry = { SOI ~ expression ~ EOI }

@@ -61,18 +61,32 @@ pub mod db {
     }
 
     impl Db {
-        /// Execute a statement (INSERT/UPDATE/DELETE/CREATE).
-        /// SQL uses $1, $2, ... for parameters (converted to rusqlite ?1, ?2).
-        pub fn exec(&self, sql: &str, params: &[&dyn rusqlite::types::ToSql]) -> Result<(), Box<dyn Error>> {
+        /// Execute without params
+        pub fn exec(&self, sql: &str) -> Result<(), Box<dyn Error>> {
             let sql = convert_params(sql);
-            self.conn.execute(&sql, params)?;
+            self.conn.execute(&sql, ())?;
             Ok(())
         }
 
-        /// Query rows (SELECT). Returns Vec<Row>.
-        pub fn query(&self, sql: &str, params: &[&dyn rusqlite::types::ToSql]) -> Result<Vec<Row>, Box<dyn Error>> {
+        /// Execute with one param (any type implementing ToSql)
+        pub fn exec1<T: rusqlite::types::ToSql>(&self, sql: &str, param: &T) -> Result<(), Box<dyn Error>> {
             let sql = convert_params(sql);
-            let mut stmt = self.conn.prepare(&sql)?;
+            self.conn.execute(&sql, [param as &dyn rusqlite::types::ToSql])?;
+            Ok(())
+        }
+
+        /// Query without params
+        pub fn query(&self, sql: &str) -> Result<Vec<Row>, Box<dyn Error>> {
+            self.query_internal(&convert_params(sql), ())
+        }
+
+        /// Query with one param
+        pub fn query1<T: rusqlite::types::ToSql>(&self, sql: &str, param: &T) -> Result<Vec<Row>, Box<dyn Error>> {
+            self.query_internal(&convert_params(sql), [param as &dyn rusqlite::types::ToSql])
+        }
+
+        fn query_internal<P: rusqlite::Params>(&self, sql: &str, params: P) -> Result<Vec<Row>, Box<dyn Error>> {
+            let mut stmt = self.conn.prepare(sql)?;
             let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
             let rows = stmt.query_map(params, |row| {
                 let mut data = HashMap::new();
@@ -176,9 +190,9 @@ mod tests {
     #[test]
     fn test_sqlite_open_exec_query() {
         let db = Sqlite.open(":memory:").unwrap();
-        db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", &[]).unwrap();
-        db.exec("INSERT INTO t (name) VALUES (?1)", &[&"hello"]).unwrap();
-        let rows = db.query("SELECT id, name FROM t", &[]).unwrap();
+        db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)").unwrap();
+        db.exec1("INSERT INTO t (name) VALUES (?1)", &"hello").unwrap();
+        let rows = db.query("SELECT id, name FROM t").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].int("id"), 1);
         assert_eq!(rows[0].string("name"), "hello");
@@ -187,10 +201,19 @@ mod tests {
     #[test]
     fn test_dollar_param_conversion() {
         let db = Sqlite.open(":memory:").unwrap();
-        db.exec("CREATE TABLE t (v TEXT)", &[]).unwrap();
-        db.exec("INSERT INTO t (v) VALUES ($1)", &[&"test"]).unwrap();
-        let rows = db.query("SELECT v FROM t", &[]).unwrap();
+        db.exec("CREATE TABLE t (v TEXT)").unwrap();
+        db.exec1("INSERT INTO t (v) VALUES ($1)", &"test").unwrap();
+        let rows = db.query("SELECT v FROM t").unwrap();
         assert_eq!(rows[0].string("v"), "test");
+    }
+
+    #[test]
+    fn test_exec1_int() {
+        let db = Sqlite.open(":memory:").unwrap();
+        db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)").unwrap();
+        db.exec1("INSERT INTO t (v) VALUES ($1)", &42_i64).unwrap();
+        let rows = db.query("SELECT v FROM t").unwrap();
+        assert_eq!(rows[0].int("v"), 42);
     }
 
     #[test]
