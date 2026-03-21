@@ -1,12 +1,3 @@
-// U Language Transpiler
-// Phase 1: U syntax → Rust code → rustc compiles
-//
-// Architecture:
-//   1. Parse .u file → AST
-//   2. Generate Rust code from AST
-//   3. Call cargo/rustc to compile
-//   4. Map errors back to .u source
-
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -35,22 +26,55 @@ fn main() -> anyhow::Result<()> {
 
     match cli {
         Cli::Build { file } => {
-            println!("TODO: build {}", file.display());
-            // 1. Read .u file
-            // 2. Parse → AST
-            // 3. Generate Rust code
-            // 4. Write to temp dir
-            // 5. Call cargo build
+            let bin = compile(&file)?;
+            eprintln!("Built: {}", bin.display());
         }
         Cli::Run { file } => {
-            println!("TODO: run {}", file.display());
-            // Same as build, then execute
+            let bin = compile(&file)?;
+            let status = std::process::Command::new(&bin).status()?;
+            std::process::exit(status.code().unwrap_or(1));
         }
         Cli::Check { file } => {
-            println!("TODO: check {}", file.display());
-            // Parse only, report errors
+            let ast = parse_file(&file)?;
+            eprintln!("OK: {} statements", ast.statements.len());
+            println!("{:#?}", ast);
         }
     }
 
     Ok(())
+}
+
+fn parse_file(path: &PathBuf) -> anyhow::Result<u::ast::Program> {
+    let source = std::fs::read_to_string(path)?;
+    u::parser::parse(&source)
+}
+
+fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
+    let ast = parse_file(path)?;
+    let rust_code = u::generator::generate(&ast);
+
+    let tmp_dir = std::env::temp_dir().join("u-lang");
+    std::fs::create_dir_all(&tmp_dir)?;
+
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let rs_path = tmp_dir.join(format!("{}.rs", stem));
+    let bin_path = tmp_dir.join(stem);
+
+    std::fs::write(&rs_path, &rust_code)?;
+
+    let output = std::process::Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&bin_path)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("rustc error:\n{}", stderr);
+    }
+
+    Ok(bin_path)
 }

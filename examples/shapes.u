@@ -1,0 +1,28 @@
+// shapes.u — структуры, алгебраические типы, match, мутация
+
+struct Point
+    x: Int
+    y: Int
+end
+
+type Shape
+    Circle(radius: Int)
+    Rect(width: Int, height: Int)
+end
+
+fn area(shape)
+    match shape
+        Circle(r): return r * r * 3
+        Rect(w, h): return w * h
+    end
+end
+
+p = Point(x: 10, y: 20)
+print("Point: $(p.x), $(p.y)")
+
+// :: мутация
+p::x = 100
+print("After mutation: $(p.x), $(p.y)")
+
+print("Circle area: $(area(Circle(radius: 5)))")
+print("Rect area: $(area(Rect(width: 3, height: 4)))")

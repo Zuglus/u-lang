@@ -1,5 +1,5 @@
 [package]
-name = "u-transpiler"
+name = "u"
 version = "0.1.0"
 edition = "2021"
 description = "Transpiler for the U programming language: U syntax → Rust code"
