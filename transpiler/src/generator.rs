@@ -115,7 +115,10 @@ pub fn generate(program: &Program) -> String {
         }
     }
 
-    out.push_str("fn main() -> Result<(), Box<dyn std::error::Error>> {\n");
+    out.push_str("fn main() {\n");
+    out.push_str("    if let Err(e) = _u_main() { eprintln!(\"Ошибка: {}\", e); std::process::exit(1); }\n");
+    out.push_str("}\n\n");
+    out.push_str("fn _u_main() -> Result<(), Box<dyn std::error::Error>> {\n");
     for stmt in &program.statements {
         if !matches!(stmt, Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. }) {
             gen_stmt(stmt, &mut out, 1, &ctx, true);

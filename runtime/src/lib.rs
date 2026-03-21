@@ -16,13 +16,14 @@ pub trait StrExt {
 
 impl StrExt for String {
     fn int(&self) -> Result<i64, Box<dyn Error>> {
-        Ok(self.parse::<i64>()?)
+        self.as_str().int()
     }
 }
 
 impl StrExt for str {
     fn int(&self) -> Result<i64, Box<dyn Error>> {
-        Ok(self.parse::<i64>()?)
+        self.parse::<i64>()
+            .map_err(|_| format!("\"{}\" — не целое число", self).into())
     }
 }
 
@@ -173,12 +174,12 @@ pub mod args {
     }
 
     impl ParsedArgs {
-        /// Get a required argument by name. Returns the next positional arg.
-        pub fn require(&self, name: &str) -> Result<String, Box<dyn Error>> {
-            self.positional
-                .first()
-                .cloned()
-                .ok_or_else(|| format!("Missing argument: {}", name).into())
+        /// Get a required argument. Joins all positional args (for multi-word values).
+        pub fn require(&self, _name: &str) -> Result<String, Box<dyn Error>> {
+            if self.positional.is_empty() {
+                return Err(format!("Отсутствует аргумент: <{}>", _name).into());
+            }
+            Ok(self.positional.join(" "))
         }
     }
 }
