@@ -18,6 +18,15 @@ impl fmt::Debug for ChannelPair {
     }
 }
 
+#[derive(Clone)]
+struct DbHandle(Arc<Mutex<rusqlite::Connection>>);
+
+impl fmt::Debug for DbHandle {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Db")
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(private_interfaces)]
 pub enum Value {
@@ -29,6 +38,7 @@ pub enum Value {
     Struct { type_name: String, fields: HashMap<String, Value> },
     Variant { name: String, values: Vec<Value> },
     Channel(ChannelPair),
+    Db(DbHandle),
     Type(String),
     None,
 }
@@ -70,6 +80,7 @@ impl fmt::Display for Value {
                 write!(f, ")")
             }
             Value::Channel(_) => write!(f, "<Channel>"),
+            Value::Db(_) => write!(f, "<Db>"),
             Value::Type(name) => write!(f, "<type {}>", name),
             Value::None => write!(f, "none"),
         }
@@ -96,6 +107,8 @@ pub struct Interpreter {
     scopes: Vec<HashMap<String, Value>>,
     fns: HashMap<String, FnDef>,
     methods: HashMap<String, HashMap<String, FnDef>>,
+    variant_fields: HashMap<String, Vec<String>>,
+    cli_args: Vec<String>,
 }
 
 pub fn has_memory_decl(program: &Program) -> bool {
@@ -117,6 +130,41 @@ fn val_int(args: &[Value], i: usize, ctx: &str) -> Result<i64, String> {
     }
 }
 
+fn sql_params(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+            out.push('?');
+        } else {
+            out.push(bytes[i] as char);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn to_sql(v: &Value) -> rusqlite::types::Value {
+    match v {
+        Value::Int(n) => rusqlite::types::Value::Integer(*n),
+        Value::Float(f) => rusqlite::types::Value::Real(*f),
+        Value::Str(s) => rusqlite::types::Value::Text(s.clone()),
+        Value::Bool(b) => rusqlite::types::Value::Integer(if *b { 1 } else { 0 }),
+        _ => rusqlite::types::Value::Null,
+    }
+}
+
+fn from_sql(v: rusqlite::types::Value) -> Value {
+    match v {
+        rusqlite::types::Value::Integer(n) => Value::Int(n),
+        rusqlite::types::Value::Real(f) => Value::Float(f),
+        rusqlite::types::Value::Text(s) => Value::Str(s),
+        rusqlite::types::Value::Null => Value::None,
+        rusqlite::types::Value::Blob(_) => Value::None,
+    }
+}
+
 fn ok_val(v: Value) -> Value {
     Value::Variant { name: "Ok".into(), values: vec![v] }
 }
@@ -126,10 +174,12 @@ fn err_val(msg: String) -> Value {
 }
 
 impl Interpreter {
-    pub fn new() -> Self {
+    pub fn new(cli_args: Vec<String>) -> Self {
         let mut scopes = vec![HashMap::new()];
         scopes[0].insert("Channel".into(), Value::Type("Channel".into()));
-        Interpreter { scopes, fns: HashMap::new(), methods: HashMap::new() }
+        scopes[0].insert("Sqlite".into(), Value::Type("Sqlite".into()));
+        scopes[0].insert("Args".into(), Value::Type("Args".into()));
+        Interpreter { scopes, fns: HashMap::new(), methods: HashMap::new(), variant_fields: HashMap::new(), cli_args }
     }
 
     pub fn run(&mut self, program: &Program) -> Result<(), String> {
@@ -161,7 +211,11 @@ impl Interpreter {
                 return Ok(v.clone());
             }
         }
-        Err(format!("undefined variable: {}", name))
+        match name {
+            "TcpListener" | "HttpServer" =>
+                Err(format!("{} requires compiled mode. Use: u build <file>", name)),
+            _ => Err(format!("undefined variable: {}", name)),
+        }
     }
 
     // ── Statement execution ────────────────────────────────────────────
@@ -280,9 +334,25 @@ impl Interpreter {
                 Ok(Signal::None)
             }
             Stmt::Spawn { expr, .. } => self.exec_spawn(expr),
-            // Skip: trait signatures are not needed at runtime
-            Stmt::TraitDef { .. } | Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. }
-            | Stmt::TypeDef { .. } => {
+            Stmt::TypeDef { variants, .. } => {
+                for v in variants {
+                    self.variant_fields.insert(
+                        v.name.clone(),
+                        v.fields.iter().map(|f| f.name.clone()).collect(),
+                    );
+                }
+                Ok(Signal::None)
+            }
+            Stmt::UseDecl { path, .. } => {
+                let compiled_only = ["std.http", "std.tcp"];
+                if let Some(mod_name) = compiled_only.iter().find(|p| path.contains(*p)) {
+                    return Err(format!(
+                        "{} requires compiled mode. Use: u build <file>", mod_name));
+                }
+                Ok(Signal::None)
+            }
+            // Skip: trait signatures not needed at runtime
+            Stmt::TraitDef { .. } | Stmt::MemoryDecl { .. } => {
                 Ok(Signal::None)
             }
         }
@@ -307,6 +377,21 @@ impl Interpreter {
                 Some(bindings.iter().zip(values.iter())
                     .map(|(b, v)| (b.clone(), v.clone()))
                     .collect())
+            }
+            // Enum variants stored as Struct — bind fields positionally
+            (MatchPattern::Variant { name, bindings }, Value::Struct { type_name, fields })
+                if name == type_name =>
+            {
+                if let Some(field_order) = self.variant_fields.get(name) {
+                    Some(bindings.iter().zip(field_order.iter())
+                        .map(|(b, f)| (b.clone(), fields.get(f).cloned().unwrap_or(Value::None)))
+                        .collect())
+                } else {
+                    // No TypeDef — fallback: bind fields in iteration order
+                    Some(bindings.iter().zip(fields.values())
+                        .map(|(b, v)| (b.clone(), v.clone()))
+                        .collect())
+                }
             }
             _ => None,
         }
@@ -339,6 +424,8 @@ impl Interpreter {
 
         let fns = self.fns.clone();
         let methods = self.methods.clone();
+        let variant_fields = self.variant_fields.clone();
+        let cli_args = self.cli_args.clone();
 
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -346,8 +433,12 @@ impl Interpreter {
                     scopes: vec![HashMap::new()],
                     fns,
                     methods,
+                    variant_fields,
+                    cli_args,
                 };
                 interp.scopes[0].insert("Channel".into(), Value::Type("Channel".into()));
+                interp.scopes[0].insert("Sqlite".into(), Value::Type("Sqlite".into()));
+                interp.scopes[0].insert("Args".into(), Value::Type("Args".into()));
                 for (param, val) in def.params.iter().zip(arg_vals) {
                     interp.scopes[0].insert(param.clone(), val);
                 }
@@ -482,6 +573,12 @@ impl Interpreter {
             }
         }
 
+        // Db methods
+        if let Value::Db(ref handle) = obj {
+            let arg_vals: Vec<_> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
+            return self.db_method(handle, method, arg_vals);
+        }
+
         let arg_vals: Vec<_> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
 
         // Resolve type name for struct/type method lookup
@@ -492,7 +589,7 @@ impl Interpreter {
         };
 
         if let Some(ref tn) = type_name {
-            // Channel.new() — built-in constructor
+            // Channel.new()
             if tn == "Channel" && method == "new" {
                 let (tx, rx) = mpsc::channel();
                 return Ok(Value::Channel(ChannelPair {
@@ -501,18 +598,42 @@ impl Interpreter {
                 }));
             }
 
+            // Sqlite.open(path)
+            if tn == "Sqlite" && method == "open" {
+                let path = val_str(&arg_vals, 0, "Sqlite.open")?;
+                return match rusqlite::Connection::open(&path) {
+                    Ok(conn) => Ok(ok_val(Value::Db(DbHandle(Arc::new(Mutex::new(conn)))))),
+                    Err(e) => Ok(err_val(e.to_string())),
+                };
+            }
+
+            // Args.parse()
+            if tn == "Args" && method == "parse" {
+                let command = self.cli_args.first().cloned().unwrap_or_default();
+                let positional: Vec<Value> = self.cli_args.iter().skip(1)
+                    .map(|s| Value::Str(s.clone())).collect();
+                return Ok(Value::Struct {
+                    type_name: "Args".into(),
+                    fields: HashMap::from([
+                        ("command".into(), Value::Str(command)),
+                        ("_positional".into(), Value::List(positional)),
+                    ]),
+                });
+            }
+
             // User-defined methods (impl blocks)
             if let Some(def) = self.methods.get(tn).and_then(|m| m.get(method)).cloned() {
                 let has_self = def.params.first().map(|p| p == "self").unwrap_or(false);
                 let offset = if has_self { 1 } else { 0 };
 
-                let saved = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+                let global = self.scopes[0].clone();
+                let saved = std::mem::replace(&mut self.scopes, vec![global, HashMap::new()]);
                 if has_self {
-                    self.scopes[0].insert("self".into(), obj.clone());
+                    self.scopes[1].insert("self".into(), obj.clone());
                 }
                 for (i, val) in arg_vals.into_iter().enumerate() {
                     if let Some(pname) = def.params.get(i + offset) {
-                        self.scopes[0].insert(pname.clone(), val);
+                        self.scopes[1].insert(pname.clone(), val);
                     }
                 }
 
@@ -521,7 +642,7 @@ impl Interpreter {
                     Signal::None => Value::None,
                 };
 
-                let modified_self = self.scopes[0].get("self").cloned();
+                let modified_self = self.scopes[1].get("self").cloned();
                 self.scopes = saved;
 
                 if let Some(ms) = modified_self {
@@ -536,6 +657,62 @@ impl Interpreter {
 
         // Built-in methods on values
         self.builtin_method(obj, method, arg_vals)
+    }
+
+    fn db_method(&self, handle: &DbHandle, method: &str, args: Vec<Value>) -> Result<Value, String> {
+        let conn = handle.0.lock().map_err(|_| "db lock poisoned".to_string())?;
+        match method {
+            "exec" => {
+                let sql = sql_params(&val_str(&args, 0, "db.exec")?);
+                let params: Vec<rusqlite::types::Value> = args[1..].iter().map(to_sql).collect();
+                let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter()
+                    .map(|p| p as &dyn rusqlite::types::ToSql).collect();
+                match conn.execute(&sql, refs.as_slice()) {
+                    Ok(_) => Ok(ok_val(Value::None)),
+                    Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            "query" => {
+                let sql = sql_params(&val_str(&args, 0, "db.query")?);
+                let params: Vec<rusqlite::types::Value> = args[1..].iter().map(to_sql).collect();
+                let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter()
+                    .map(|p| p as &dyn rusqlite::types::ToSql).collect();
+                let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+                let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+                let rows = stmt.query_map(refs.as_slice(), |row| {
+                    let mut fields = HashMap::new();
+                    for (i, name) in col_names.iter().enumerate() {
+                        let val: rusqlite::types::Value = row.get(i)?;
+                        fields.insert(name.clone(), from_sql(val));
+                    }
+                    Ok(Value::Struct { type_name: "Row".into(), fields })
+                }).map_err(|e| e.to_string())?;
+                let result: Result<Vec<_>, _> = rows.map(|r| r.map_err(|e| e.to_string())).collect();
+                Ok(ok_val(Value::List(result?)))
+            }
+            "query_one" => {
+                let sql = sql_params(&val_str(&args, 0, "db.query_one")?);
+                let params: Vec<rusqlite::types::Value> = args[1..].iter().map(to_sql).collect();
+                let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter()
+                    .map(|p| p as &dyn rusqlite::types::ToSql).collect();
+                let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+                let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+                let mut rows = stmt.query(refs.as_slice()).map_err(|e| e.to_string())?;
+                match rows.next().map_err(|e| e.to_string())? {
+                    Some(row) => {
+                        let mut fields = HashMap::new();
+                        for (i, name) in col_names.iter().enumerate() {
+                            let val: rusqlite::types::Value = row.get(i).map_err(|e| e.to_string())?;
+                            fields.insert(name.clone(), from_sql(val));
+                        }
+                        Ok(ok_val(Value::Struct { type_name: "Row".into(), fields }))
+                    }
+                    None => Ok(ok_val(Value::None)),
+                }
+            }
+            "last_insert_id" => Ok(Value::Int(conn.last_insert_rowid())),
+            _ => Err(format!("unknown Db method: {}", method)),
+        }
     }
 
     fn builtin_method(&self, obj: Value, method: &str, args: Vec<Value>) -> Result<Value, String> {
@@ -559,6 +736,41 @@ impl Interpreter {
                 match s.trim().parse::<i64>() {
                     Ok(n) => Ok(ok_val(Value::Int(n))),
                     Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            // List methods
+            (Value::List(l), "is_empty") => Ok(Value::Bool(l.is_empty())),
+            // Row methods (column access)
+            (Value::Struct { type_name, fields }, m)
+                if type_name == "Row" && matches!(m, "int" | "string" | "bool") =>
+            {
+                let col = val_str(&args, 0, "row")?;
+                let val = fields.get(&col).cloned().unwrap_or(Value::None);
+                match m {
+                    "int" => match val {
+                        Value::Int(n) => Ok(Value::Int(n)),
+                        Value::Str(s) => Ok(Value::Int(s.parse::<i64>().unwrap_or(0))),
+                        _ => Ok(Value::Int(0)),
+                    },
+                    "string" => match val {
+                        Value::Str(s) => Ok(Value::Str(s)),
+                        v => Ok(Value::Str(v.to_string())),
+                    },
+                    "bool" => match val {
+                        Value::Int(n) => Ok(Value::Bool(n != 0)),
+                        Value::Bool(b) => Ok(Value::Bool(b)),
+                        _ => Ok(Value::Bool(false)),
+                    },
+                    _ => unreachable!(),
+                }
+            }
+            // Args.require(name)
+            (Value::Struct { type_name, fields }, "require") if type_name == "Args" => {
+                let param_name = val_str(&args, 0, "Args.require")?;
+                match fields.get("_positional") {
+                    Some(Value::List(pos)) if !pos.is_empty() =>
+                        Ok(ok_val(pos[0].clone())),
+                    _ => Ok(err_val(format!("missing argument: {}", param_name))),
                 }
             }
             _ => Err(format!("unknown method .{} on {}", method, obj)),
@@ -710,6 +922,7 @@ impl Interpreter {
                 Some(Value::Struct { type_name, .. }) => return Ok(Value::Str(type_name.clone())),
                 Some(Value::Variant { name, .. }) => return Ok(Value::Str(name.clone())),
                 Some(Value::Channel(_)) => "Channel",
+                Some(Value::Db(_)) => "Db",
                 Some(Value::Type(n)) => return Ok(Value::Str(n.clone())),
             }.into())),
             "push" => {
@@ -736,9 +949,10 @@ impl Interpreter {
                     return Err(format!("{}: expected {} args, got {}",
                         name, def.params.len(), args.len()));
                 }
-                let saved = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+                let global = self.scopes[0].clone();
+                let saved = std::mem::replace(&mut self.scopes, vec![global, HashMap::new()]);
                 for (param, val) in def.params.iter().zip(args) {
-                    self.scopes[0].insert(param.clone(), val);
+                    self.scopes[1].insert(param.clone(), val);
                 }
                 let result = match self.exec_block(&def.body)? {
                     Signal::Return(v) => v,

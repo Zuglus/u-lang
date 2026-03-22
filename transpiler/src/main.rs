@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(status.code().unwrap_or(1));
             } else {
                 // Script mode — interpret directly
-                let mut interp = u::interpreter::Interpreter::new();
+                let mut interp = u::interpreter::Interpreter::new(args);
                 interp.run(&ast).map_err(|e| anyhow::anyhow!("{}", e))?;
             }
         }
