@@ -1,5 +1,4 @@
 // sitegen.u — статический сайт-генератор
-// Скриптовый режим: без memory(...), стандартная библиотека доступна
 
 fn replace_bold(text: String) -> String
     result = ""

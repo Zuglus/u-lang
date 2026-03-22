@@ -1,8 +1,6 @@
 // server.u — HTTP-сервер для статических файлов (keep-alive)
-memory(auto)
 
 use std.http: HttpServer
-use std.io: print
 
 fn handle(conn: HttpConn)
     loop

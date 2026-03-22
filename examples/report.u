@@ -1,5 +1,4 @@
 // report.u — скрипт обработки данных
-// Нет memory(...) → скрипт, всё доступно автоматически
 
 data = parse_csv(read_file("workers.csv")?)
 

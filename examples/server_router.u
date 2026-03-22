@@ -1,8 +1,6 @@
 // server_router.u — HTTP-сервер с роутером
-memory(auto)
 
 use std.http: Router, Response, serve
-use std.io: print
 
 fn handle_index(request) -> Response
     return Response.ok("<h1>Home</h1>", "text/html")

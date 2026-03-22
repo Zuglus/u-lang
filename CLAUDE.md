@@ -2,74 +2,94 @@
 
 ## Проект
 
-U Language — единый язык программирования. Транспилятор: U syntax → Rust code → rustc.
+U Language — Kotlin для Rust. Удобный язык поверх Rust-экосистемы. `.u` и `.rs` в одном проекте.
 
 ## Спецификация
 
-Полная спецификация в `spec/SPEC.md` (v1.0). Примеры в `examples/`.
+`spec/SPEC.md` (v1.1). Примеры в `examples/`.
+
+## Архитектура
+
+```
+.u файл → [Parser/pest] → AST → [Interpreter]   → результат      (u run, 0.01s)
+                              → [Generator]    → .rs → rustc → бинарник (u build, нативная скорость)
+```
+
+Два инструмента, один код:
+- `u run` — интерпретатор AST, std::thread для spawn, встроенный Sqlite
+- `u build` — транспиляция в Rust, tokio для async, компиляция через rustc
 
 ## Ключевые решения
 
-- **Четыре режима**: скрипт (по умолчанию), `memory(auto)` (RC+GC, spawn→tokio), `memory(own)` (ownership, Thread.spawn), `memory(no)` (без кучи, bare metal)
-- **`::` для мутации своих байтов**: `.` — чтение или команда внешней системе (db.exec, ch.send, conn.write), `::` — изменение своих байтов в RAM (list::push, user::name = "...")
-- **Скрипт по умолчанию**: нет `memory(...)` → всё автоматически, стандартная библиотека доступна
+- **Нет memory(auto/own/no)**: просто `.u` и `.rs` файлы
+- **`::` для мутации**: `.` — чтение/команда, `::` — изменение байтов в RAM
 - **`end`-блоки**: вместо `{}`
 - **4 модификатора**: `unsafe`, `weak`, `test`, `pub`
-- **Лямбда**: одно выражение: `fn(x) x > 0`
-- **`?`**: пробрасывание ошибок и nullable
-- **`$`**: строковая интерполяция
-- **`use`**: обязателен только с `memory(...)`
+- **Лямбда**: одно выражение `fn(x) x > 0`
+- **`?`** пробрасывание ошибок, **`!`** force-unwrap (panic)
+- **`$`** строковая интерполяция, **`$(expr)`** для выражений
 - **Return**: явный. Нет return = процедура
 - **Типы**: `pub` fn — с типами и `->`, остальные — без
-- **Скобки `()`**: обязательны при вызове функции
-- **Spawn безопасен**: автоматический `catch_unwind`, паника → лог в stderr, горутина умирает, остальные живут
-- **`::` запрещён в spawn**: `fn f(::data)` + `spawn f(x)` → ошибка компиляции
+- **Spawn безопасен**: catch_unwind, `::` запрещён в spawn
+- **Именование**: заглавная = тип (`Sqlite`, `Channel`), строчная = функция (`print`, `read_file`)
 
-## Архитектура транспилятора
+## Четыре уровня доступности
 
-```
-.u файл → [Parser] → AST → [Validator] → [Generator] → .rs файл → rustc → бинарник
-```
-
-Транспилятор на Rust. Парсер: pest. CLI: clap. Генератор возвращает `Result<String, String>` — валидация перед генерацией (spawn safety). Маппинг ошибок: `// line:N` комментарии в Rust-коде → rustc ошибки отображаются с номерами строк .u файла.
+1. **Язык** — `Int`, `String`, `Bool`, `List`, `Result`, `none`, `true`, `false`
+2. **Ядро** (без use) — `print`, `read_file`, `write_file`, `list_dir`, `create_dir`, `sleep`, `range`, `len`, `str`, `int`
+3. **Стандартная** (`use std.xxx`) — `Sqlite`, `Router`, `Channel`, `Args`, `Json`, `Regex`, строковые утилиты
+4. **Внешнее** (`use`) — `.rs` модули, crates.io
 
 ## Команды
 
 ```
 cd transpiler
-cargo build          # собрать транспилятор
-cargo test           # запустить тесты (12 тестов)
-cargo install --path .  # установить как команду `u`
-u run examples/hello.u  # запустить .u файл
-u build examples/hello.u  # собрать бинарник
-u check examples/hello.u  # только парсинг (AST)
+cargo build                     # собрать
+cargo test                      # тесты (12 штук)
+cargo install --path .          # установить как `u`
+u run examples/hello.u          # интерпретатор (0.01s)
+u build examples/hello.u        # компиляция (нативная скорость)
+u check examples/hello.u        # только парсинг (AST)
 ```
 
-## Работающие примеры (11)
+## Работающие примеры (12)
 
 1. `hello.u` — строковая интерполяция, print
-2. `calc.u` — fn, if, for, return, рекурсия, списки
-3. `shapes.u` — struct, enum, match =>, `::` мутация полей
-4. `todo_cli.u` — SQLite, Args, match на строках, `?` ошибки
+2. `calc.u` — fn, if, for, return, рекурсия
+3. `shapes.u` — struct, enum, match =>, `::` мутация
+4. `todo_cli.u` — Sqlite, Args, match, `?` ошибки
 5. `workers.u` — spawn, loop, Channel, ch.send/recv
-6. `server.u` — HTTP-сервер (TcpListener), memory(auto), use, spawn, keep-alive
-7. `fault_tolerance.u` — spawn автоматически ловит паники
+6. `server.u` — HTTP-сервер (TcpListener), spawn, keep-alive
+7. `fault_tolerance.u` — spawn ловит паники, `!` force-unwrap
 8. `race_check.u` — безопасный счётчик через канал
-9. `spawn_safety.u` — демонстрация запрета `::` в spawn
-10. `sitegen.u` — статический сайт-генератор: маркдаун→HTML, шаблоны, скриптовый режим
-11. `objects.u` — impl блоки, trait, методы через `.` и `::`
+9. `spawn_safety.u` — запрет `::` в spawn
+10. `sitegen.u` — маркдаун→HTML генератор, файловый I/O
+11. `objects.u` — impl, trait, методы через `.` и `::`
+12. `server_router.u` — Router API, 35K req/sec
 
 ## Приоритет работы
 
-1. Парсер: разбор .u файла в AST
-2. Генератор: AST → Rust-код + валидация
-3. CLI обёртка: `u build`, `u run`, `u check`
-4. Маппинг ошибок: rustc ошибки → .u файл
-5. Рантайм: crate u-runtime (Sqlite, Args, Channel, HttpServer, catch, error, read_file, write_file, list_dir, create_dir, mime_type, path_stem, sleep, строковые утилиты)
+1. Интерпретатор: расширение поддержки конструкций (u run)
+2. Парсер: новые конструкции из спецификации
+3. Генератор: AST → Rust-код + валидация (u build)
+4. Стандартная библиотека: std.http, std.json, std.regex
+5. Маппинг ошибок: rustc → .u файл (базовый работает)
 
-## Рантайм-функции (строки и файлы)
+## Структура транспилятора
 
-Генератор знает сигнатуры рантайм-функций (`runtime_param_types`) и автоматически добавляет `&` для `&str` параметров.
+```
+transpiler/src/
+  main.rs          — CLI (clap): u run / u build / u check
+  lib.rs           — pub mod ast, parser, generator, interpreter
+  ast.rs           — AST типы (Program, Stmt, Expr, Value...)
+  parser.rs        — pest парсер → AST
+  u.pest           — PEG грамматика
+  generator.rs     — AST → Rust-код (для u build)
+  interpreter.rs   — AST → прямое выполнение (для u run)
+```
 
-Файловые: `read_file`, `write_file`, `list_dir`, `create_dir`, `path_stem`, `mime_type`
-Строковые: `starts_with`, `ends_with`, `contains`, `replace`, `find`, `find_from`, `slice_from`, `slice_range`, `split_lines`, `str_len`, `trim`
+## Интерпретатор (interpreter.rs)
+
+Встроенные типы: `Int`, `Float`, `Str`, `Bool`, `List`, `Struct`, `Variant`, `Channel`, `Db`, `Type`, `None`.
+Конкурентность: `std::thread::spawn` + `std::sync::mpsc` + `Arc<Mutex<>>`.
+Sqlite: `rusqlite` (bundled). Паники: `catch_unwind` в spawn.

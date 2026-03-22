@@ -1,5 +1,4 @@
 // objects.u — struct, impl, trait, методы через точку
-// Скриптовый режим: без memory(...)
 
 struct Counter
     value: Int

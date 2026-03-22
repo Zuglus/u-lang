@@ -1,60 +1,99 @@
 # U Language
 
-Единый язык программирования с двумя режимами памяти, оператором `::` для мутаций и градиентом от скрипта к проекту.
+Kotlin для Rust. Удобный язык поверх Rust-экосистемы.
 
-## Идея
-
-Все необходимые концепции программирования уже существуют в разных языках. Задача — соединить их в один инструмент:
-
-- **Rust** — ownership, система типов, cargo
-- **Go** — горутины, простота, обратная совместимость
-- **Python** — скриптовый режим, REPL, краткость
-- **Kotlin** — nullable `?`, вывод типов
-- **Ruby** — `end`-блоки
+- `.u` и `.rs` в одном проекте, один build, бесшовные вызовы
+- `u run` — интерпретатор, 0.01 сек старт
+- `u build` — компиляция через Rust, нативная скорость
+- Вся экосистема crates.io доступна
 
 ## Быстрый пример
 
 ```
-// hello.u — скрипт, просто работает
 name = "Мир"
 print("Привет, $name!")
 ```
 
 ```
-// server.u — проект с явными зависимостями
-memory(auto)
+fn factorial(n)
+    if n < 2
+        return 1
+    end
+    return n * factorial(n - 1)
+end
 
-use std.http: Http, Response
-use std.io: print
+print("10! = $(factorial(10))")
+```
 
-server = Http.listen(":8080")?
-print("Запущен на :8080")
-
-loop
-    conn = server.accept()?
-    spawn handle(conn)
+```
+db = Sqlite.open("app.db")?
+db.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")?
+db.exec("INSERT INTO users (name) VALUES ($1)", "Иван")?
+users = db.query("SELECT id, name FROM users")?
+for row in users
+    print("$(row.int("id")). $(row.string("name"))")
 end
 ```
 
-## Ключевые решения
+## Установка
 
-- **Два режима памяти**: `memory(auto)` (RC+GC, горутины) и `memory(own)` (ownership, async)
-- **`::` для мутации**: `users::sort()` — видно сразу. `users.len()` — безопасное чтение
-- **Скрипт по умолчанию**: нет `memory(...)` → всё автоматически, как Python
-- **Один способ**: один синтаксис для каждой конструкции, форматировщик решает стиль
-- **Транспилятор в Rust**: наш синтаксис → Rust-код → rustc компилирует
-
-## Структура
-
-```
-spec/           — спецификация языка
-examples/       — примеры кода
-transpiler/     — транспилятор (Rust)
+```bash
+git clone https://github.com/Zuglus/u-lang.git
+cd u-lang/transpiler
+cargo install --path .
 ```
 
-## Статус
+## Запуск
 
-Черновик спецификации v0.8. Фаза 1 — транспилятор в разработке.
+```bash
+u run examples/hello.u          # интерпретатор (0.01s)
+u build examples/hello.u        # компиляция → нативный бинарник
+u check examples/hello.u        # парсинг без выполнения
+```
+
+## Отличия от Rust
+
+| U | Rust | Причина |
+|---|------|---------|
+| `end` | `}` | Клавиатура |
+| нет `;` | `;` | Упрощение |
+| `fn(x) expr` | `\|x\| expr` | Клавиатура |
+| `$name` | `format!("{name}")` | Упрощение |
+| `::` мутация | `&mut` | Видимость мутации |
+| нет `let` | `let`/`let mut` | Упрощение |
+| `spawn f()` | `tokio::spawn(...)` | Упрощение |
+| скрипт по умолчанию | `fn main()` | Упрощение |
+
+## Бенчмарки
+
+| Метрика | Результат |
+|---------|-----------|
+| `u run hello.u` | 0.01 сек |
+| `u run todo_cli.u` (Sqlite) | 0.01 сек |
+| HTTP-сервер (Router + hyper) | 35,342 req/sec |
+| vs Axum | +64% быстрее |
+| 100K запросов | 0 ошибок |
+
+## 12 примеров
+
+| Пример | Что демонстрирует |
+|--------|-------------------|
+| `hello.u` | Строковая интерполяция, print |
+| `calc.u` | Функции, рекурсия, циклы |
+| `shapes.u` | Struct, enum, match, `::` мутация |
+| `todo_cli.u` | Sqlite, CLI-аргументы, `?` ошибки |
+| `workers.u` | Spawn, каналы, конкурентность |
+| `server.u` | HTTP-сервер, keep-alive |
+| `fault_tolerance.u` | Автоматический catch паник в spawn |
+| `race_check.u` | Безопасный счётчик через канал |
+| `spawn_safety.u` | Запрет `::` в spawn |
+| `sitegen.u` | Статический сайт-генератор |
+| `objects.u` | Impl, trait, методы |
+| `server_router.u` | Router API, 35K req/sec |
+
+## Спецификация
+
+Полная спецификация: [spec/SPEC.md](spec/SPEC.md) (v1.1)
 
 ## Лицензия
 
