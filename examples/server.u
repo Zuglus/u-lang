@@ -1,18 +1,23 @@
-// server.u — HTTP-сервер для статических файлов
+// server.u — HTTP-сервер для статических файлов (keep-alive)
 memory(auto)
 
 use std.http: HttpServer
 use std.io: print
 
 fn handle(conn: HttpConn)
-    path = conn.path()
-    if path == "/"
-        path = "/index.html"
-    end
-    file = read_file("public$(path)")
-    match file
-        Ok(content): conn.respond(Response.ok(content, mime_type(path)))
-        Err(_): conn.respond(Response.not_found("404 Not Found"))
+    loop
+        path = conn.path()
+        if path == ""
+            return
+        end
+        if path == "/"
+            path = "/index.html"
+        end
+        file = read_file("public$(path)")
+        match file
+            Ok(content): conn.respond(Response.ok(content, mime_type(path)))
+            Err(_): conn.respond(Response.not_found("404 Not Found"))
+        end
     end
 end
 

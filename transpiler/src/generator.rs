@@ -298,7 +298,7 @@ fn is_async_function(name: &str) -> bool {
 }
 
 fn is_async_method(method: &str) -> bool {
-    matches!(method, "recv" | "accept" | "listen" | "respond")
+    matches!(method, "recv" | "accept" | "listen" | "respond" | "path")
 }
 
 fn is_plain_string(expr: &Expr) -> bool {

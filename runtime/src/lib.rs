@@ -295,12 +295,12 @@ pub mod http {
 
     impl HttpListener {
         pub async fn accept(&self) -> Result<HttpConn, Box<dyn Error + Send + Sync>> {
-            let (mut stream, _) = self.listener.accept().await?;
-            let mut buf = [0u8; 4096];
-            let n = stream.read(&mut buf).await?;
-            let request = String::from_utf8_lossy(&buf[..n]);
-            let path = parse_path(&request);
-            Ok(HttpConn { stream: Arc::new(Mutex::new(stream)), request_path: path })
+            let (stream, _) = self.listener.accept().await?;
+            stream.set_nodelay(true).ok();
+            Ok(HttpConn {
+                stream: Arc::new(Mutex::new(stream)),
+                keep_alive: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            })
         }
     }
 
@@ -311,29 +311,51 @@ pub mod http {
                 return parts[1].to_string();
             }
         }
-        "/".to_string()
+        String::new()
     }
 
     #[derive(Clone)]
     pub struct HttpConn {
         stream: Arc<Mutex<TcpStream>>,
-        request_path: String,
+        keep_alive: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl HttpConn {
-        pub fn path(&self) -> String {
-            self.request_path.clone()
+        /// Read next HTTP request from connection. Returns path, or "" on EOF/closed.
+        pub async fn path(&self) -> String {
+            // If previous request was not keep-alive, stop reading
+            if !self.keep_alive.load(std::sync::atomic::Ordering::Relaxed) {
+                return String::new();
+            }
+            let mut stream = self.stream.lock().await;
+            let mut buf = [0u8; 4096];
+            match stream.read(&mut buf).await {
+                Ok(0) | Err(_) => String::new(),
+                Ok(n) => {
+                    let request = String::from_utf8_lossy(&buf[..n]);
+                    // Check if client wants keep-alive
+                    let ka = request.to_ascii_lowercase().contains("keep-alive");
+                    self.keep_alive.store(ka, std::sync::atomic::Ordering::Relaxed);
+                    parse_path(&request)
+                }
+            }
         }
 
         pub async fn respond(&self, response: HttpResponse) {
+            let ka = self.keep_alive.load(std::sync::atomic::Ordering::Relaxed);
+            let conn_header = if ka { "keep-alive" } else { "close" };
             let mut stream = self.stream.lock().await;
             let resp = format!(
-                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n{}",
                 response.status_code, response.status_text,
-                response.content_type, response.body.len(), response.body
+                response.content_type, response.body.len(), conn_header, response.body
             );
             let _ = stream.write_all(resp.as_bytes()).await;
             let _ = stream.flush().await;
+            // If not keep-alive, shut down write side so server sends FIN first
+            if !ka {
+                let _ = stream.shutdown().await;
+            }
         }
     }
 
