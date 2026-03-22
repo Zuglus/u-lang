@@ -18,7 +18,7 @@ fn is_kw(rule: Rule) -> bool {
         | Rule::elif_kw | Rule::else_kw | Rule::end_kw | Rule::return_kw
         | Rule::struct_kw | Rule::enum_kw | Rule::match_kw
         | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw
-        | Rule::trait_kw | Rule::impl_kw)
+        | Rule::trait_kw | Rule::impl_kw | Rule::test_kw)
 }
 
 fn meaningful(pairs: pest::iterators::Pairs<Rule>) -> impl Iterator<Item = pest::iterators::Pair<Rule>> + '_ {
@@ -97,7 +97,16 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                 }
             }
             let body = build_block(block_pair.unwrap())?;
-            Ok(Stmt::FnDef { name, params, return_type, body, span: s })
+            Ok(Stmt::FnDef { name, params, return_type, body, is_test: false, span: s })
+        }
+        Rule::test_fn_def => {
+            let s = span(inner.as_span());
+            let fn_pair = inner.into_inner().find(|p| p.as_rule() == Rule::fn_def).unwrap();
+            match build_stmt_inner(fn_pair)? {
+                Stmt::FnDef { name, params, return_type, body, .. } =>
+                    Ok(Stmt::FnDef { name, params, return_type, body, is_test: true, span: s }),
+                _ => unreachable!(),
+            }
         }
         Rule::for_loop => {
             let s = span(inner.as_span());

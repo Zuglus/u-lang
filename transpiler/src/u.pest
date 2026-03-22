@@ -3,8 +3,10 @@
 program = { SOI ~ NEWLINE* ~ (statement ~ (NEWLINE+ | &EOI))* ~ EOI }
 
 // Statements
-statement = { memory_stmt | use_stmt | struct_def | type_def | trait_def | impl_block | fn_def | for_loop | loop_stmt | if_stmt | match_stmt
+statement = { memory_stmt | use_stmt | struct_def | type_def | trait_def | impl_block | test_fn_def | fn_def | for_loop | loop_stmt | if_stmt | match_stmt
             | spawn_stmt | return_stmt | mutation_stmt | assignment | expr_stmt }
+
+test_fn_def = { test_kw ~ fn_def }
 
 memory_stmt = { memory_kw ~ "(" ~ identifier ~ ")" }
 use_stmt    = { use_kw ~ use_path ~ ":" ~ use_items }
@@ -128,6 +130,7 @@ memory_kw = @{ "memory" ~ !(LETTER | ASCII_DIGIT | "_") }
 use_kw    = @{ "use" ~ !(LETTER | ASCII_DIGIT | "_") }
 trait_kw  = @{ "trait" ~ !(LETTER | ASCII_DIGIT | "_") }
 impl_kw   = @{ "impl" ~ !(LETTER | ASCII_DIGIT | "_") }
+test_kw   = @{ "test" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Implicit rules
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }

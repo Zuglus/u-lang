@@ -1,0 +1,61 @@
+// test_demo.u — демонстрация u test
+
+fn add(a, b)
+    return a + b
+end
+
+fn factorial(n)
+    if n < 2
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+
+fn abs(x)
+    if x < 0
+        return 0 - x
+    end
+    return x
+end
+
+test fn test_add()
+    assert(add(2, 3) == 5)
+    assert(add(0, 0) == 0)
+    assert(add(-1, 1) == 0)
+end
+
+test fn test_factorial()
+    assert(factorial(0) == 1)
+    assert(factorial(1) == 1)
+    assert(factorial(5) == 120)
+    assert_eq(factorial(10), 3628800)
+end
+
+test fn test_abs()
+    assert_eq(abs(-42), 42)
+    assert_eq(abs(0), 0)
+    assert_eq(abs(17), 17)
+end
+
+test fn test_strings()
+    s = "Hello, World!"
+    assert(s.contains("World"))
+    assert(s.starts_with("Hello"))
+    assert(s.ends_with("!"))
+    assert_eq(s.len(), 13)
+end
+
+test fn test_lists()
+    nums = [1, 2, 3, 4, 5]
+    assert_eq(nums.len(), 5)
+    assert_eq(nums.first(), 1)
+    assert_eq(nums.last(), 5)
+    assert_eq(nums.sum(), 15)
+
+    evens = nums.filter(fn(x) x % 2 == 0)
+    assert_eq(evens.len(), 2)
+
+    doubled = nums.map(fn(x) x * 2)
+    assert_eq(doubled.first(), 2)
+    assert_eq(doubled.last(), 10)
+end

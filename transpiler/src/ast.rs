@@ -51,6 +51,7 @@ pub enum Stmt {
         params: Vec<FnParam>,
         return_type: Option<String>,
         body: Vec<Stmt>,
+        is_test: bool,
         span: Span,
     },
     ForLoop { pattern: ForPattern, iter: Expr, body: Vec<Stmt>, span: Span },

@@ -95,6 +95,7 @@ impl fmt::Display for Value {
 struct FnDef {
     params: Vec<String>,
     has_mut_params: bool,
+    is_test: bool,
     body: Vec<Stmt>,
 }
 
@@ -167,6 +168,17 @@ fn from_sql(v: rusqlite::types::Value) -> Value {
     }
 }
 
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::None, Value::None) => true,
+        _ => false,
+    }
+}
+
 fn ok_val(v: Value) -> Value {
     Value::Variant { name: "Ok".into(), values: vec![v] }
 }
@@ -193,6 +205,34 @@ impl Interpreter {
             }
         }
         Ok(())
+    }
+
+    pub fn run_tests(&mut self, program: &Program) -> (usize, usize) {
+        std::panic::set_hook(Box::new(|_| {}));
+        // Phase 1: register definitions only (skip executable top-level code)
+        for stmt in &program.statements {
+            match stmt {
+                Stmt::FnDef { .. } | Stmt::StructDef { .. } | Stmt::ImplBlock { .. }
+                | Stmt::TraitDef { .. } | Stmt::TypeDef { .. } | Stmt::UseDecl { .. }
+                | Stmt::MemoryDecl { .. } => { let _ = self.exec_stmt(stmt); }
+                _ => {}
+            }
+        }
+        // Phase 2: collect and run test functions
+        let test_names: Vec<String> = self.fns.iter()
+            .filter(|(_, d)| d.is_test)
+            .map(|(n, _)| n.clone())
+            .collect();
+        let mut passed = 0;
+        let mut failed = 0;
+        for name in &test_names {
+            print!("test {} ... ", name);
+            match self.call_fn(name, vec![]) {
+                Ok(_) => { println!("ok"); passed += 1; }
+                Err(e) => { println!("FAILED"); eprintln!("  {}", e); failed += 1; }
+            }
+        }
+        (passed, failed)
     }
 
     // ── Scope helpers ──────────────────────────────────────────────────
@@ -233,10 +273,11 @@ impl Interpreter {
                 self.eval_expr(expr)?;
                 Ok(Signal::None)
             }
-            Stmt::FnDef { name, params, body, .. } => {
+            Stmt::FnDef { name, params, body, is_test, .. } => {
                 self.fns.insert(name.clone(), FnDef {
                     params: params.iter().map(|p| p.name.clone()).collect(),
                     has_mut_params: params.iter().any(|p| p.is_mut),
+                    is_test: *is_test,
                     body: body.clone(),
                 });
                 Ok(Signal::None)
@@ -329,6 +370,7 @@ impl Interpreter {
                             .insert(name.clone(), FnDef {
                                 params: params.iter().map(|p| p.name.clone()).collect(),
                                 has_mut_params: params.iter().any(|p| p.is_mut),
+                                is_test: false,
                                 body: body.clone(),
                             });
                     }
@@ -887,6 +929,19 @@ impl Interpreter {
                 let ms = val_int(&args, 0, "sleep")?;
                 std::thread::sleep(std::time::Duration::from_millis(ms as u64));
                 Ok(Value::None)
+            }
+
+            // ── Testing ───────────────────────────────────────────────
+            "assert" => {
+                let val = args.first().unwrap_or(&Value::None);
+                if self.is_truthy(val) { Ok(Value::None) }
+                else { Err("assert failed".into()) }
+            }
+            "assert_eq" => {
+                let a = args.get(0).cloned().unwrap_or(Value::None);
+                let b = args.get(1).cloned().unwrap_or(Value::None);
+                if values_equal(&a, &b) { Ok(Value::None) }
+                else { Err(format!("assert_eq failed: got {}, expected {}", a, b)) }
             }
 
             // ── File system ────────────────────────────────────────────

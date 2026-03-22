@@ -22,6 +22,11 @@ enum Cli {
         #[arg()]
         file: PathBuf,
     },
+    /// Run test functions
+    Test {
+        #[arg()]
+        file: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -52,9 +57,49 @@ fn main() -> anyhow::Result<()> {
             eprintln!("OK: {} statements", ast.statements.len());
             println!("{:#?}", ast);
         }
+        Cli::Test { file } => {
+            let files = match file {
+                Some(f) => vec![f],
+                None => find_u_files(".")?,
+            };
+            let mut total_passed = 0;
+            let mut total_failed = 0;
+            for f in &files {
+                let source = std::fs::read_to_string(f)?;
+                let ast = u::parser::parse(&source)?;
+                let has_tests = ast.statements.iter().any(|s|
+                    matches!(s, u::ast::Stmt::FnDef { is_test: true, .. }));
+                if !has_tests { continue; }
+                if files.len() > 1 {
+                    eprintln!("--- {} ---", f.display());
+                }
+                let mut interp = u::interpreter::Interpreter::new(vec![]);
+                let (p, f) = interp.run_tests(&ast);
+                total_passed += p;
+                total_failed += f;
+            }
+            println!("\n{} passed, {} failed", total_passed, total_failed);
+            if total_failed > 0 {
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())
+}
+
+fn find_u_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            if let Some(s) = path.to_str() { files.extend(find_u_files(s)?); }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("u") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 fn parse_file(path: &PathBuf) -> anyhow::Result<u::ast::Program> {
