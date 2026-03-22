@@ -33,11 +33,19 @@ fn main() -> anyhow::Result<()> {
             eprintln!("Built: {}", bin.display());
         }
         Cli::Run { file, args } => {
-            let bin = compile(&file)?;
-            let status = std::process::Command::new(&bin)
-                .args(&args)
-                .status()?;
-            std::process::exit(status.code().unwrap_or(1));
+            let ast = parse_file(&file)?;
+            if u::interpreter::has_memory_decl(&ast) {
+                // Project mode — compile through Rust
+                let bin = compile(&file)?;
+                let status = std::process::Command::new(&bin)
+                    .args(&args)
+                    .status()?;
+                std::process::exit(status.code().unwrap_or(1));
+            } else {
+                // Script mode — interpret directly
+                let mut interp = u::interpreter::Interpreter::new();
+                interp.run(&ast).map_err(|e| anyhow::anyhow!("{}", e))?;
+            }
         }
         Cli::Check { file } => {
             let ast = parse_file(&file)?;

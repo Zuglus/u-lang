@@ -9,26 +9,26 @@ pub struct TypedField {
     pub type_name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Variant {
     pub name: String,
     pub fields: Vec<TypedField>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TraitMethodSig {
     pub name: String,
     pub params: Vec<FnParam>,
     pub return_type: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MatchArm {
     pub pattern: MatchPattern,
     pub body: Stmt,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MatchPattern {
     Variant { name: String, bindings: Vec<String> },
     StringLit(String),
@@ -42,7 +42,7 @@ pub struct FnParam {
     pub is_mut: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Assignment { name: String, value: Expr, span: Span },
     ExprStmt { expr: Expr, span: Span },
@@ -74,7 +74,7 @@ pub enum Stmt {
     ImplBlock { trait_name: Option<String>, target: String, methods: Vec<Stmt>, span: Span },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ForPattern {
     Single(String),
     Tuple(Vec<String>),

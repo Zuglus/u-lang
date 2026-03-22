@@ -1,0 +1,813 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, mpsc};
+use std::panic::AssertUnwindSafe;
+use crate::ast::*;
+use std::fmt;
+
+// ── Value ──────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct ChannelPair {
+    tx: mpsc::Sender<Value>,
+    rx: Arc<Mutex<mpsc::Receiver<Value>>>,
+}
+
+impl fmt::Debug for ChannelPair {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Channel")
+    }
+}
+
+#[derive(Debug, Clone)]
+#[allow(private_interfaces)]
+pub enum Value {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+    List(Vec<Value>),
+    Struct { type_name: String, fields: HashMap<String, Value> },
+    Variant { name: String, values: Vec<Value> },
+    Channel(ChannelPair),
+    Type(String),
+    None,
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Value::Int(n) => write!(f, "{}", n),
+            Value::Float(n) => {
+                if n.fract() == 0.0 { write!(f, "{}", *n as i64) }
+                else { write!(f, "{}", n) }
+            }
+            Value::Str(s) => write!(f, "{}", s),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::List(items) => {
+                write!(f, "[")?;
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "]")
+            }
+            Value::Struct { type_name, fields } => {
+                write!(f, "{}(", type_name)?;
+                let mut first = true;
+                for (k, v) in fields {
+                    if !first { write!(f, ", ")?; }
+                    write!(f, "{}: {}", k, v)?;
+                    first = false;
+                }
+                write!(f, ")")
+            }
+            Value::Variant { name, values } => {
+                write!(f, "{}(", name)?;
+                for (i, v) in values.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, ")")
+            }
+            Value::Channel(_) => write!(f, "<Channel>"),
+            Value::Type(name) => write!(f, "<type {}>", name),
+            Value::None => write!(f, "none"),
+        }
+    }
+}
+
+// ── Internal types ─────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct FnDef {
+    params: Vec<String>,
+    has_mut_params: bool,
+    body: Vec<Stmt>,
+}
+
+enum Signal {
+    None,
+    Return(Value),
+}
+
+// ── Interpreter ────────────────────────────────────────────────────────
+
+pub struct Interpreter {
+    scopes: Vec<HashMap<String, Value>>,
+    fns: HashMap<String, FnDef>,
+    methods: HashMap<String, HashMap<String, FnDef>>,
+}
+
+pub fn has_memory_decl(program: &Program) -> bool {
+    program.statements.iter().any(|s| matches!(s, Stmt::MemoryDecl { .. }))
+}
+
+fn val_str(args: &[Value], i: usize, ctx: &str) -> Result<String, String> {
+    match args.get(i) {
+        Some(Value::Str(s)) => Ok(s.clone()),
+        Some(v) => Ok(v.to_string()),
+        None => Err(format!("{}: missing arg {}", ctx, i)),
+    }
+}
+
+fn val_int(args: &[Value], i: usize, ctx: &str) -> Result<i64, String> {
+    match args.get(i) {
+        Some(Value::Int(n)) => Ok(*n),
+        _ => Err(format!("{}: expected int arg {}", ctx, i)),
+    }
+}
+
+fn ok_val(v: Value) -> Value {
+    Value::Variant { name: "Ok".into(), values: vec![v] }
+}
+
+fn err_val(msg: String) -> Value {
+    Value::Variant { name: "Err".into(), values: vec![Value::Str(msg)] }
+}
+
+impl Interpreter {
+    pub fn new() -> Self {
+        let mut scopes = vec![HashMap::new()];
+        scopes[0].insert("Channel".into(), Value::Type("Channel".into()));
+        Interpreter { scopes, fns: HashMap::new(), methods: HashMap::new() }
+    }
+
+    pub fn run(&mut self, program: &Program) -> Result<(), String> {
+        // Suppress default panic output — spawn uses catch_unwind with its own reporting
+        std::panic::set_hook(Box::new(|_| {}));
+        for stmt in &program.statements {
+            if let Signal::Return(_) = self.exec_stmt(stmt)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    // ── Scope helpers ──────────────────────────────────────────────────
+
+    fn set_var(&mut self, name: &str, val: Value) {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(name) {
+                scope.insert(name.to_string(), val);
+                return;
+            }
+        }
+        self.scopes.last_mut().unwrap().insert(name.to_string(), val);
+    }
+
+    fn get_var(&self, name: &str) -> Result<Value, String> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(v) = scope.get(name) {
+                return Ok(v.clone());
+            }
+        }
+        Err(format!("undefined variable: {}", name))
+    }
+
+    // ── Statement execution ────────────────────────────────────────────
+
+    fn exec_stmt(&mut self, stmt: &Stmt) -> Result<Signal, String> {
+        match stmt {
+            Stmt::Assignment { name, value, .. } => {
+                let val = self.eval_expr(value)?;
+                self.set_var(name, val);
+                Ok(Signal::None)
+            }
+            Stmt::ExprStmt { expr, .. } => {
+                self.eval_expr(expr)?;
+                Ok(Signal::None)
+            }
+            Stmt::FnDef { name, params, body, .. } => {
+                self.fns.insert(name.clone(), FnDef {
+                    params: params.iter().map(|p| p.name.clone()).collect(),
+                    has_mut_params: params.iter().any(|p| p.is_mut),
+                    body: body.clone(),
+                });
+                Ok(Signal::None)
+            }
+            Stmt::Return { value, .. } => {
+                let val = match value {
+                    Some(e) => self.eval_expr(e)?,
+                    None => Value::None,
+                };
+                Ok(Signal::Return(val))
+            }
+            Stmt::If { condition, body, elifs, else_body, .. } => {
+                let cv = self.eval_expr(condition)?;
+                if self.is_truthy(&cv) {
+                    return self.exec_block(body);
+                }
+                for (cond, block) in elifs {
+                    let cv = self.eval_expr(cond)?;
+                    if self.is_truthy(&cv) {
+                        return self.exec_block(block);
+                    }
+                }
+                if let Some(block) = else_body {
+                    return self.exec_block(block);
+                }
+                Ok(Signal::None)
+            }
+            Stmt::ForLoop { pattern, iter, body, .. } => {
+                let items = match self.eval_expr(iter)? {
+                    Value::List(items) => items,
+                    _ => return Err("for: expected list".into()),
+                };
+                for item in items {
+                    match pattern {
+                        ForPattern::Single(name) => self.set_var(name, item),
+                        ForPattern::Tuple(names) => {
+                            if let Value::List(tuple) = item {
+                                for (i, n) in names.iter().enumerate() {
+                                    self.set_var(n, tuple.get(i).cloned().unwrap_or(Value::None));
+                                }
+                            }
+                        }
+                    }
+                    if let Signal::Return(v) = self.exec_block(body)? {
+                        return Ok(Signal::Return(v));
+                    }
+                }
+                Ok(Signal::None)
+            }
+            Stmt::Loop { body, .. } => {
+                loop {
+                    if let Signal::Return(v) = self.exec_block(body)? {
+                        return Ok(Signal::Return(v));
+                    }
+                }
+            }
+            Stmt::Match { expr, arms, .. } => {
+                let val = self.eval_expr(expr)?;
+                for arm in arms {
+                    if let Some(bindings) = self.match_pattern(&arm.pattern, &val) {
+                        for (name, v) in bindings {
+                            self.set_var(&name, v);
+                        }
+                        return self.exec_stmt(&arm.body);
+                    }
+                }
+                Ok(Signal::None)
+            }
+            Stmt::MutAssign { object, field, value, .. } => {
+                let val = self.eval_expr(value)?;
+                if let Expr::Identifier { name, .. } = object {
+                    let mut obj = self.get_var(name)?;
+                    if let Value::Struct { ref mut fields, .. } = obj {
+                        fields.insert(field.clone(), val);
+                    }
+                    self.set_var(name, obj);
+                }
+                Ok(Signal::None)
+            }
+            Stmt::StructDef { name, .. } => {
+                self.set_var(name, Value::Type(name.clone()));
+                Ok(Signal::None)
+            }
+            Stmt::ImplBlock { target, methods: method_stmts, .. } => {
+                for m in method_stmts {
+                    if let Stmt::FnDef { name, params, body, .. } = m {
+                        self.methods
+                            .entry(target.clone())
+                            .or_default()
+                            .insert(name.clone(), FnDef {
+                                params: params.iter().map(|p| p.name.clone()).collect(),
+                                has_mut_params: params.iter().any(|p| p.is_mut),
+                                body: body.clone(),
+                            });
+                    }
+                }
+                Ok(Signal::None)
+            }
+            Stmt::Spawn { expr, .. } => self.exec_spawn(expr),
+            // Skip: trait signatures are not needed at runtime
+            Stmt::TraitDef { .. } | Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. }
+            | Stmt::TypeDef { .. } => {
+                Ok(Signal::None)
+            }
+        }
+    }
+
+    fn exec_block(&mut self, stmts: &[Stmt]) -> Result<Signal, String> {
+        for stmt in stmts {
+            if let Signal::Return(v) = self.exec_stmt(stmt)? {
+                return Ok(Signal::Return(v));
+            }
+        }
+        Ok(Signal::None)
+    }
+
+    fn match_pattern(&self, pattern: &MatchPattern, val: &Value) -> Option<Vec<(String, Value)>> {
+        match (pattern, val) {
+            (MatchPattern::Wildcard, _) => Some(vec![]),
+            (MatchPattern::StringLit(s), Value::Str(v)) if s == v => Some(vec![]),
+            (MatchPattern::Variant { name, bindings }, Value::Variant { name: vn, values })
+                if name == vn =>
+            {
+                Some(bindings.iter().zip(values.iter())
+                    .map(|(b, v)| (b.clone(), v.clone()))
+                    .collect())
+            }
+            _ => None,
+        }
+    }
+
+    // ── Spawn ──────────────────────────────────────────────────────────
+
+    fn exec_spawn(&mut self, expr: &Expr) -> Result<Signal, String> {
+        let (name, args) = match expr {
+            Expr::FunctionCall { name, args, .. } => (name, args),
+            _ => return Err("spawn: expected function call".into()),
+        };
+
+        let arg_vals: Vec<_> = args.iter()
+            .map(|a| self.eval_expr(a))
+            .collect::<Result<_, _>>()?;
+
+        let def = self.fns.get(name.as_str()).cloned()
+            .ok_or_else(|| format!("spawn: undefined function: {}", name))?;
+
+        if def.has_mut_params {
+            return Err(format!(
+                "spawn: function '{}' has :: params — cannot spawn with mutable references", name));
+        }
+
+        if arg_vals.len() != def.params.len() {
+            return Err(format!("spawn {}: expected {} args, got {}",
+                name, def.params.len(), arg_vals.len()));
+        }
+
+        let fns = self.fns.clone();
+        let methods = self.methods.clone();
+
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut interp = Interpreter {
+                    scopes: vec![HashMap::new()],
+                    fns,
+                    methods,
+                };
+                interp.scopes[0].insert("Channel".into(), Value::Type("Channel".into()));
+                for (param, val) in def.params.iter().zip(arg_vals) {
+                    interp.scopes[0].insert(param.clone(), val);
+                }
+                interp.exec_block(&def.body)
+            }));
+
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => eprintln!("spawn error: {}", e),
+                Err(panic_val) => {
+                    let msg = panic_val
+                        .downcast::<String>().map(|s| *s)
+                        .or_else(|e| e.downcast::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_else(|_| "unknown panic".into());
+                    eprintln!("spawn panicked: {}", msg);
+                }
+            }
+        });
+
+        Ok(Signal::None)
+    }
+
+    // ── Expression evaluation ──────────────────────────────────────────
+
+    fn eval_expr(&mut self, expr: &Expr) -> Result<Value, String> {
+        match expr {
+            Expr::IntLiteral { value, .. } => Ok(Value::Int(*value)),
+            Expr::FloatLiteral { value, .. } => Ok(Value::Float(*value)),
+            Expr::BoolLiteral { value, .. } => Ok(Value::Bool(*value)),
+            Expr::StringLiteral { parts, .. } => {
+                let mut s = String::new();
+                for part in parts {
+                    match part {
+                        StringPart::Text(t) => s.push_str(t),
+                        StringPart::Interpolation(e) => s.push_str(&self.eval_expr(e)?.to_string()),
+                    }
+                }
+                Ok(Value::Str(s))
+            }
+            Expr::Identifier { name, .. } => self.get_var(name),
+            Expr::List { elements, .. } => {
+                let vals: Result<Vec<_>, _> = elements.iter().map(|e| self.eval_expr(e)).collect();
+                Ok(Value::List(vals?))
+            }
+            Expr::FunctionCall { name, args, .. } => {
+                let av: Vec<_> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
+                self.call_fn(name, av)
+            }
+            Expr::BinaryOp { left, op, right, .. } => {
+                let lv = self.eval_expr(left)?;
+                let rv = self.eval_expr(right)?;
+                self.eval_binop(&lv, op, &rv)
+            }
+            Expr::UnaryOp { op, expr, .. } => {
+                let val = self.eval_expr(expr)?;
+                match op.as_str() {
+                    "-" => match val {
+                        Value::Int(n) => Ok(Value::Int(-n)),
+                        Value::Float(f) => Ok(Value::Float(-f)),
+                        _ => Err("unary -: expected number".into()),
+                    },
+                    "not" => Ok(Value::Bool(!self.is_truthy(&val))),
+                    _ => Err(format!("unknown unary op: {}", op)),
+                }
+            }
+            Expr::MethodCall { object, method, args, .. } => {
+                self.eval_method_call(object, method, args)
+            }
+            Expr::FieldAccess { object, field, .. } => {
+                let obj = self.eval_expr(object)?;
+                match obj {
+                    Value::Struct { fields, .. } => {
+                        fields.get(field).cloned()
+                            .ok_or_else(|| format!("no field .{}", field))
+                    }
+                    _ => Err(format!("field access .{} on non-struct", field)),
+                }
+            }
+            Expr::StructInit { name, fields, .. } => {
+                let mut fv = HashMap::new();
+                for (fname, fexpr) in fields {
+                    fv.insert(fname.clone(), self.eval_expr(fexpr)?);
+                }
+                Ok(Value::Struct { type_name: name.clone(), fields: fv })
+            }
+            Expr::PostfixOp { expr, op, .. } => {
+                let val = self.eval_expr(expr)?;
+                match op.as_str() {
+                    "?" => match val {
+                        Value::Variant { name, mut values } if name == "Ok" =>
+                            Ok(values.pop().unwrap_or(Value::None)),
+                        Value::Variant { name, values } if name == "Err" =>
+                            Err(values.first().map(|v| v.to_string()).unwrap_or_default()),
+                        other => Ok(other),
+                    },
+                    "!" => match val {
+                        Value::Variant { name, mut values } if name == "Ok" =>
+                            Ok(values.pop().unwrap_or(Value::None)),
+                        Value::Variant { name, values } if name == "Err" => {
+                            let msg = values.first().map(|v| v.to_string()).unwrap_or_default();
+                            panic!("unwrap on Err: {}", msg);
+                        }
+                        other => Ok(other),
+                    },
+                    _ => Ok(val),
+                }
+            }
+            Expr::Lambda { .. } => Ok(Value::None),
+        }
+    }
+
+    // ── Method calls (channel + struct + built-in) ─────────────────────
+
+    fn eval_method_call(&mut self, object: &Expr, method: &str, args: &[Expr]) -> Result<Value, String> {
+        let obj = self.eval_expr(object)?;
+
+        // Channel methods — before arg evaluation for recv (no args)
+        if let Value::Channel(ref ch) = obj {
+            match method {
+                "send" => {
+                    let val = if let Some(a) = args.first() {
+                        self.eval_expr(a)?
+                    } else { Value::None };
+                    ch.tx.send(val).map_err(|_| "channel closed".to_string())?;
+                    return Ok(Value::None);
+                }
+                "recv" => {
+                    let rx = ch.rx.lock().map_err(|_| "channel lock poisoned".to_string())?;
+                    return rx.recv().map_err(|_| "channel closed".to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let arg_vals: Vec<_> = args.iter().map(|a| self.eval_expr(a)).collect::<Result<_, _>>()?;
+
+        // Resolve type name for struct/type method lookup
+        let type_name = match &obj {
+            Value::Struct { type_name, .. } => Some(type_name.clone()),
+            Value::Type(n) => Some(n.clone()),
+            _ => None,
+        };
+
+        if let Some(ref tn) = type_name {
+            // Channel.new() — built-in constructor
+            if tn == "Channel" && method == "new" {
+                let (tx, rx) = mpsc::channel();
+                return Ok(Value::Channel(ChannelPair {
+                    tx,
+                    rx: Arc::new(Mutex::new(rx)),
+                }));
+            }
+
+            // User-defined methods (impl blocks)
+            if let Some(def) = self.methods.get(tn).and_then(|m| m.get(method)).cloned() {
+                let has_self = def.params.first().map(|p| p == "self").unwrap_or(false);
+                let offset = if has_self { 1 } else { 0 };
+
+                let saved = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+                if has_self {
+                    self.scopes[0].insert("self".into(), obj.clone());
+                }
+                for (i, val) in arg_vals.into_iter().enumerate() {
+                    if let Some(pname) = def.params.get(i + offset) {
+                        self.scopes[0].insert(pname.clone(), val);
+                    }
+                }
+
+                let result = match self.exec_block(&def.body)? {
+                    Signal::Return(v) => v,
+                    Signal::None => Value::None,
+                };
+
+                let modified_self = self.scopes[0].get("self").cloned();
+                self.scopes = saved;
+
+                if let Some(ms) = modified_self {
+                    if let Expr::Identifier { name, .. } = object {
+                        self.set_var(name, ms);
+                    }
+                }
+
+                return Ok(result);
+            }
+        }
+
+        // Built-in methods on values
+        self.builtin_method(obj, method, arg_vals)
+    }
+
+    fn builtin_method(&self, obj: Value, method: &str, args: Vec<Value>) -> Result<Value, String> {
+        match (&obj, method) {
+            (Value::List(l), "len") => Ok(Value::Int(l.len() as i64)),
+            (Value::Str(s), "len") => Ok(Value::Int(s.len() as i64)),
+            (Value::Str(s), "contains") => Ok(Value::Bool(s.contains(val_str(&args, 0, "contains")?.as_str()))),
+            (Value::Str(s), "starts_with") => Ok(Value::Bool(s.starts_with(val_str(&args, 0, "starts_with")?.as_str()))),
+            (Value::Str(s), "ends_with") => Ok(Value::Bool(s.ends_with(val_str(&args, 0, "ends_with")?.as_str()))),
+            (Value::Str(s), "replace") => {
+                let from = val_str(&args, 0, "replace")?;
+                let to = val_str(&args, 1, "replace")?;
+                Ok(Value::Str(s.replace(&from, &to)))
+            }
+            (Value::Str(s), "trim") => Ok(Value::Str(s.trim().into())),
+            (Value::Str(s), "split") => {
+                let sep = val_str(&args, 0, "split")?;
+                Ok(Value::List(s.split(&sep).map(|p| Value::Str(p.into())).collect()))
+            }
+            (Value::Str(s), "int") => {
+                match s.trim().parse::<i64>() {
+                    Ok(n) => Ok(ok_val(Value::Int(n))),
+                    Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            _ => Err(format!("unknown method .{} on {}", method, obj)),
+        }
+    }
+
+    // ── Function calls ─────────────────────────────────────────────────
+
+    fn call_fn(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            // ── I/O ────────────────────────────────────────────────────
+            "print" => {
+                if let Some(v) = args.first() { println!("{}", v); }
+                Ok(Value::None)
+            }
+            "sleep" => {
+                let ms = val_int(&args, 0, "sleep")?;
+                std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+                Ok(Value::None)
+            }
+
+            // ── File system ────────────────────────────────────────────
+            "read_file" => {
+                let path = val_str(&args, 0, "read_file")?;
+                match std::fs::read_to_string(&path) {
+                    Ok(c) => Ok(ok_val(Value::Str(c))),
+                    Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            "write_file" => {
+                let path = val_str(&args, 0, "write_file")?;
+                let content = val_str(&args, 1, "write_file")?;
+                match std::fs::write(&path, &content) {
+                    Ok(_) => Ok(ok_val(Value::None)),
+                    Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            "list_dir" => {
+                let path = val_str(&args, 0, "list_dir")?;
+                match std::fs::read_dir(&path) {
+                    Ok(entries) => {
+                        let mut files: Vec<Value> = entries.flatten()
+                            .filter_map(|e| e.file_name().to_str().map(|s| Value::Str(s.into())))
+                            .collect();
+                        files.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+                        Ok(ok_val(Value::List(files)))
+                    }
+                    Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            "create_dir" => {
+                let path = val_str(&args, 0, "create_dir")?;
+                match std::fs::create_dir_all(&path) {
+                    Ok(_) => Ok(ok_val(Value::None)),
+                    Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            "path_stem" => {
+                let path = val_str(&args, 0, "path_stem")?;
+                let stem = std::path::Path::new(&path)
+                    .file_stem().and_then(|s| s.to_str())
+                    .unwrap_or(&path);
+                Ok(Value::Str(stem.into()))
+            }
+
+            // ── String functions ───────────────────────────────────────
+            "starts_with" => {
+                let (text, prefix) = (val_str(&args, 0, "starts_with")?, val_str(&args, 1, "starts_with")?);
+                Ok(Value::Bool(text.starts_with(&prefix)))
+            }
+            "ends_with" => {
+                let (text, suffix) = (val_str(&args, 0, "ends_with")?, val_str(&args, 1, "ends_with")?);
+                Ok(Value::Bool(text.ends_with(&suffix)))
+            }
+            "contains" => {
+                let (text, sub) = (val_str(&args, 0, "contains")?, val_str(&args, 1, "contains")?);
+                Ok(Value::Bool(text.contains(&sub)))
+            }
+            "replace" => {
+                let (text, from, to) = (val_str(&args, 0, "replace")?, val_str(&args, 1, "replace")?, val_str(&args, 2, "replace")?);
+                Ok(Value::Str(text.replace(&from, &to)))
+            }
+            "find" => {
+                let (text, pat) = (val_str(&args, 0, "find")?, val_str(&args, 1, "find")?);
+                Ok(Value::Int(text.find(&pat).map(|i| i as i64).unwrap_or(-1)))
+            }
+            "find_from" => {
+                let text = val_str(&args, 0, "find_from")?;
+                let pat = val_str(&args, 1, "find_from")?;
+                let start = val_int(&args, 2, "find_from")?.max(0) as usize;
+                let result = if start <= text.len() {
+                    text[start..].find(&pat).map(|i| (i + start) as i64).unwrap_or(-1)
+                } else { -1 };
+                Ok(Value::Int(result))
+            }
+            "slice_from" => {
+                let text = val_str(&args, 0, "slice_from")?;
+                let start = val_int(&args, 1, "slice_from")?.max(0) as usize;
+                let start = start.min(text.len());
+                Ok(Value::Str(text[start..].into()))
+            }
+            "slice_range" => {
+                let text = val_str(&args, 0, "slice_range")?;
+                let start = val_int(&args, 1, "slice_range")?.max(0) as usize;
+                let end = val_int(&args, 2, "slice_range")?.max(0) as usize;
+                let start = start.min(text.len());
+                let end = end.min(text.len()).max(start);
+                Ok(Value::Str(text[start..end].into()))
+            }
+            "split_lines" => {
+                let text = val_str(&args, 0, "split_lines")?;
+                Ok(Value::List(text.lines().map(|l| Value::Str(l.into())).collect()))
+            }
+            "str_len" => {
+                let text = val_str(&args, 0, "str_len")?;
+                Ok(Value::Int(text.len() as i64))
+            }
+            "trim" => {
+                let text = val_str(&args, 0, "trim")?;
+                Ok(Value::Str(text.trim().into()))
+            }
+
+            // ── Collection / conversion ────────────────────────────────
+            "len" => match args.first() {
+                Some(Value::List(l)) => Ok(Value::Int(l.len() as i64)),
+                Some(Value::Str(s)) => Ok(Value::Int(s.len() as i64)),
+                _ => Err("len: expected list or string".into()),
+            },
+            "str" => Ok(Value::Str(args.first().map(|v| v.to_string()).unwrap_or_default())),
+            "int" => match args.first() {
+                Some(Value::Str(s)) => s.trim().parse::<i64>().map(Value::Int).map_err(|e| format!("int: {}", e)),
+                Some(Value::Float(f)) => Ok(Value::Int(*f as i64)),
+                Some(Value::Int(n)) => Ok(Value::Int(*n)),
+                _ => Err("int: expected string or number".into()),
+            },
+            "float" => match args.first() {
+                Some(Value::Str(s)) => s.trim().parse::<f64>().map(Value::Float).map_err(|e| format!("float: {}", e)),
+                Some(Value::Int(n)) => Ok(Value::Float(*n as f64)),
+                Some(Value::Float(f)) => Ok(Value::Float(*f)),
+                _ => Err("float: expected string or number".into()),
+            },
+            "type" => Ok(Value::Str(match args.first() {
+                Some(Value::Int(_)) => "Int",
+                Some(Value::Float(_)) => "Float",
+                Some(Value::Str(_)) => "String",
+                Some(Value::Bool(_)) => "Bool",
+                Some(Value::List(_)) => "List",
+                Some(Value::None) | None => "None",
+                Some(Value::Struct { type_name, .. }) => return Ok(Value::Str(type_name.clone())),
+                Some(Value::Variant { name, .. }) => return Ok(Value::Str(name.clone())),
+                Some(Value::Channel(_)) => "Channel",
+                Some(Value::Type(n)) => return Ok(Value::Str(n.clone())),
+            }.into())),
+            "push" => {
+                if args.len() == 2 {
+                    if let Value::List(mut l) = args[0].clone() {
+                        l.push(args[1].clone());
+                        Ok(Value::List(l))
+                    } else { Err("push: first arg must be list".into()) }
+                } else { Err("push: expected 2 args".into()) }
+            }
+            "range" => match (args.get(0), args.get(1)) {
+                (Some(Value::Int(start)), Some(Value::Int(end))) =>
+                    Ok(Value::List((*start..*end).map(Value::Int).collect())),
+                (Some(Value::Int(end)), None) =>
+                    Ok(Value::List((0..*end).map(Value::Int).collect())),
+                _ => Err("range: expected int args".into()),
+            },
+
+            // ── User-defined functions ─────────────────────────────────
+            _ => {
+                let def = self.fns.get(name).cloned()
+                    .ok_or_else(|| format!("undefined function: {}", name))?;
+                if args.len() != def.params.len() {
+                    return Err(format!("{}: expected {} args, got {}",
+                        name, def.params.len(), args.len()));
+                }
+                let saved = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+                for (param, val) in def.params.iter().zip(args) {
+                    self.scopes[0].insert(param.clone(), val);
+                }
+                let result = match self.exec_block(&def.body)? {
+                    Signal::Return(v) => v,
+                    Signal::None => Value::None,
+                };
+                self.scopes = saved;
+                Ok(result)
+            }
+        }
+    }
+
+    // ── Operators ──────────────────────────────────────────────────────
+
+    fn is_truthy(&self, val: &Value) -> bool {
+        match val {
+            Value::Bool(b) => *b,
+            Value::Int(n) => *n != 0,
+            Value::Float(f) => *f != 0.0,
+            Value::Str(s) => !s.is_empty(),
+            Value::List(l) => !l.is_empty(),
+            Value::None => false,
+            _ => true,
+        }
+    }
+
+    fn eval_binop(&self, left: &Value, op: &str, right: &Value) -> Result<Value, String> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => match op {
+                "+" => Ok(Value::Int(a + b)),
+                "-" => Ok(Value::Int(a - b)),
+                "*" => Ok(Value::Int(a * b)),
+                "/" => { if *b == 0 { return Err("division by zero".into()); } Ok(Value::Int(a / b)) }
+                "%" => { if *b == 0 { return Err("division by zero".into()); } Ok(Value::Int(a % b)) }
+                "==" => Ok(Value::Bool(a == b)),
+                "!=" => Ok(Value::Bool(a != b)),
+                ">" => Ok(Value::Bool(a > b)),
+                "<" => Ok(Value::Bool(a < b)),
+                ">=" => Ok(Value::Bool(a >= b)),
+                "<=" => Ok(Value::Bool(a <= b)),
+                _ => Err(format!("unknown op: {}", op)),
+            },
+            (Value::Float(a), Value::Float(b)) => match op {
+                "+" => Ok(Value::Float(a + b)),
+                "-" => Ok(Value::Float(a - b)),
+                "*" => Ok(Value::Float(a * b)),
+                "/" => Ok(Value::Float(a / b)),
+                "%" => Ok(Value::Float(a % b)),
+                "==" => Ok(Value::Bool(a == b)),
+                "!=" => Ok(Value::Bool(a != b)),
+                ">" => Ok(Value::Bool(a > b)),
+                "<" => Ok(Value::Bool(a < b)),
+                ">=" => Ok(Value::Bool(a >= b)),
+                "<=" => Ok(Value::Bool(a <= b)),
+                _ => Err(format!("unknown op: {}", op)),
+            },
+            (Value::Int(a), Value::Float(_)) => self.eval_binop(&Value::Float(*a as f64), op, right),
+            (Value::Float(_), Value::Int(b)) => self.eval_binop(left, op, &Value::Float(*b as f64)),
+            (Value::Str(a), Value::Str(b)) => match op {
+                "+" => Ok(Value::Str(format!("{}{}", a, b))),
+                "==" => Ok(Value::Bool(a == b)),
+                "!=" => Ok(Value::Bool(a != b)),
+                _ => Err(format!("string op not supported: {}", op)),
+            },
+            (Value::Bool(a), Value::Bool(b)) => match op {
+                "==" => Ok(Value::Bool(a == b)),
+                "!=" => Ok(Value::Bool(a != b)),
+                _ => Err(format!("bool op not supported: {}", op)),
+            },
+            _ => Err(format!("type mismatch: {} {} {}", left, op, right)),
+        }
+    }
+}
