@@ -710,6 +710,28 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                     return;
                 }
             }
+            // Dot methods that map to runtime free functions: obj.find(x) → u_runtime::find(&obj, &x)
+            let rt_method = match method.as_str() {
+                "find" if args.len() == 1 => Some(("find", &["&str", "&str"] as &[&str])),
+                "find_from" => Some(("find_from", &["&str", "&str", "i64"] as &[&str])),
+                "slice" => Some(("slice_range", &["&str", "i64", "i64"] as &[&str])),
+                "slice_from" => Some(("slice_from", &["&str", "i64"] as &[&str])),
+                "split_lines" if args.is_empty() => Some(("split_lines", &["&str"] as &[&str])),
+                _ => None,
+            };
+            if let Some((rt_fn, param_types)) = rt_method {
+                out.push_str("u_runtime::"); out.push_str(rt_fn); out.push('(');
+                // First param is the object
+                if param_types.first() == Some(&"&str") { out.push('&'); }
+                gen_expr(object, out, ctx);
+                for (i, arg) in args.iter().enumerate() {
+                    out.push_str(", ");
+                    if param_types.get(i + 1) == Some(&"&str") { out.push('&'); }
+                    gen_expr(arg, out, ctx);
+                }
+                out.push(')');
+                return;
+            }
             gen_expr(object, out, ctx);
             // exec/query with 2+ args → exec1/query1 with &second_arg
             if (method == "exec" || method == "query") && args.len() > 1 {

@@ -38,6 +38,7 @@ pub enum Value {
     Struct { type_name: String, fields: HashMap<String, Value> },
     Variant { name: String, values: Vec<Value> },
     Channel(ChannelPair),
+    Lambda { params: Vec<String>, body: Expr },
     Db(DbHandle),
     Type(String),
     None,
@@ -80,6 +81,7 @@ impl fmt::Display for Value {
                 write!(f, ")")
             }
             Value::Channel(_) => write!(f, "<Channel>"),
+            Value::Lambda { .. } => write!(f, "<fn>"),
             Value::Db(_) => write!(f, "<Db>"),
             Value::Type(name) => write!(f, "<type {}>", name),
             Value::None => write!(f, "none"),
@@ -546,7 +548,9 @@ impl Interpreter {
                     _ => Ok(val),
                 }
             }
-            Expr::Lambda { .. } => Ok(Value::None),
+            Expr::Lambda { params, body, .. } => {
+                Ok(Value::Lambda { params: params.clone(), body: *body.clone() })
+            }
         }
     }
 
@@ -715,7 +719,54 @@ impl Interpreter {
         }
     }
 
-    fn builtin_method(&self, obj: Value, method: &str, args: Vec<Value>) -> Result<Value, String> {
+    fn list_lambda_method(&mut self, obj: Value, method: &str, args: Vec<Value>) -> Result<Value, String> {
+        let list = match obj {
+            Value::List(l) => l,
+            _ => return Err(format!(".{} requires a list", method)),
+        };
+        let (params, body) = match args.into_iter().next() {
+            Some(Value::Lambda { params, body }) => (params, body),
+            _ => return Err(format!(".{} requires a lambda argument", method)),
+        };
+        match method {
+            "filter" => {
+                let mut result = Vec::new();
+                for item in &list {
+                    self.scopes.push(HashMap::new());
+                    if let Some(p) = params.first() {
+                        self.scopes.last_mut().unwrap().insert(p.clone(), item.clone());
+                    }
+                    let val = self.eval_expr(&body)?;
+                    self.scopes.pop();
+                    if self.is_truthy(&val) {
+                        result.push(item.clone());
+                    }
+                }
+                Ok(Value::List(result))
+            }
+            "map" => {
+                let mut result = Vec::new();
+                for item in &list {
+                    self.scopes.push(HashMap::new());
+                    if let Some(p) = params.first() {
+                        self.scopes.last_mut().unwrap().insert(p.clone(), item.clone());
+                    }
+                    let val = self.eval_expr(&body)?;
+                    self.scopes.pop();
+                    result.push(val);
+                }
+                Ok(Value::List(result))
+            }
+            _ => Err(format!("unknown list method: {}", method)),
+        }
+    }
+
+    fn builtin_method(&mut self, obj: Value, method: &str, args: Vec<Value>) -> Result<Value, String> {
+        // Lambda-consuming methods
+        if matches!(method, "filter" | "map") {
+            return self.list_lambda_method(obj, method, args);
+        }
+
         match (&obj, method) {
             (Value::List(l), "len") => Ok(Value::Int(l.len() as i64)),
             (Value::Str(s), "len") => Ok(Value::Int(s.len() as i64)),
@@ -732,6 +783,34 @@ impl Interpreter {
                 let sep = val_str(&args, 0, "split")?;
                 Ok(Value::List(s.split(&sep).map(|p| Value::Str(p.into())).collect()))
             }
+            (Value::Str(s), "find") => {
+                let pat = val_str(&args, 0, "find")?;
+                Ok(Value::Int(s.find(&pat).map(|i| i as i64).unwrap_or(-1)))
+            }
+            (Value::Str(s), "find_from") => {
+                let pat = val_str(&args, 0, "find_from")?;
+                let start = val_int(&args, 1, "find_from")?.max(0) as usize;
+                let result = if start <= s.len() {
+                    s[start..].find(&pat).map(|i| (i + start) as i64).unwrap_or(-1)
+                } else { -1 };
+                Ok(Value::Int(result))
+            }
+            (Value::Str(s), "slice") => {
+                let start = val_int(&args, 0, "slice")?.max(0) as usize;
+                let end = val_int(&args, 1, "slice")?.max(0) as usize;
+                let start = start.min(s.len());
+                let end = end.min(s.len()).max(start);
+                Ok(Value::Str(s[start..end].into()))
+            }
+            (Value::Str(s), "slice_from") => {
+                let start = val_int(&args, 0, "slice_from")?.max(0) as usize;
+                let start = start.min(s.len());
+                Ok(Value::Str(s[start..].into()))
+            }
+            (Value::Str(s), "split_lines") => {
+                Ok(Value::List(s.lines().map(|l| Value::Str(l.into())).collect()))
+            }
+            (Value::Str(s), "to_string") => Ok(Value::Str(s.clone())),
             (Value::Str(s), "int") => {
                 match s.trim().parse::<i64>() {
                     Ok(n) => Ok(ok_val(Value::Int(n))),
@@ -740,6 +819,24 @@ impl Interpreter {
             }
             // List methods
             (Value::List(l), "is_empty") => Ok(Value::Bool(l.is_empty())),
+            (Value::List(l), "first") => Ok(l.first().cloned().unwrap_or(Value::None)),
+            (Value::List(l), "last") => Ok(l.last().cloned().unwrap_or(Value::None)),
+            (Value::List(l), "sum") => {
+                let sum: i64 = l.iter().map(|v| match v {
+                    Value::Int(n) => *n,
+                    _ => 0,
+                }).sum();
+                Ok(Value::Int(sum))
+            }
+            (Value::List(l), "join") => {
+                let sep = val_str(&args, 0, "join")?;
+                Ok(Value::Str(l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&sep)))
+            }
+            // Int/Float methods
+            (Value::Int(n), "abs") => Ok(Value::Int(n.abs())),
+            (Value::Int(n), "to_string") => Ok(Value::Str(n.to_string())),
+            (Value::Float(f), "abs") => Ok(Value::Float(f.abs())),
+            (Value::Float(f), "to_string") => Ok(Value::Str(f.to_string())),
             // Row methods (column access)
             (Value::Struct { type_name, fields }, m)
                 if type_name == "Row" && matches!(m, "int" | "string" | "bool") =>
@@ -922,6 +1019,7 @@ impl Interpreter {
                 Some(Value::Struct { type_name, .. }) => return Ok(Value::Str(type_name.clone())),
                 Some(Value::Variant { name, .. }) => return Ok(Value::Str(name.clone())),
                 Some(Value::Channel(_)) => "Channel",
+                Some(Value::Lambda { .. }) => "Lambda",
                 Some(Value::Db(_)) => "Db",
                 Some(Value::Type(n)) => return Ok(Value::Str(n.clone())),
             }.into())),
