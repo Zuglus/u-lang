@@ -45,17 +45,18 @@ u build examples/hello.u  # собрать бинарник
 u check examples/hello.u  # только парсинг (AST)
 ```
 
-## Работающие примеры (9)
+## Работающие примеры (10)
 
 1. `hello.u` — строковая интерполяция, print
 2. `calc.u` — fn, if, for, return, рекурсия, списки
 3. `shapes.u` — struct, type (enum), match, `::` мутация полей
 4. `todo_cli.u` — SQLite, Args, match на строках, `?` ошибки
 5. `workers.u` — spawn, loop, Channel, ch.send/recv
-6. `server.u` — HTTP-сервер (TcpListener), memory(auto), use, spawn
+6. `server.u` — HTTP-сервер (TcpListener), memory(auto), use, spawn, keep-alive
 7. `fault_tolerance.u` — spawn автоматически ловит паники
 8. `race_check.u` — безопасный счётчик через канал
 9. `spawn_safety.u` — демонстрация запрета `::` в spawn
+10. `sitegen.u` — статический сайт-генератор: маркдаун→HTML, шаблоны, скриптовый режим
 
 ## Приоритет работы
 
@@ -63,4 +64,11 @@ u check examples/hello.u  # только парсинг (AST)
 2. Генератор: AST → Rust-код + валидация
 3. CLI обёртка: `u build`, `u run`, `u check`
 4. Маппинг ошибок: rustc ошибки → .u файл
-5. Рантайм: crate u-runtime (Sqlite, Args, Channel, HttpServer, catch, error, read_file, mime_type, sleep)
+5. Рантайм: crate u-runtime (Sqlite, Args, Channel, HttpServer, catch, error, read_file, write_file, list_dir, create_dir, mime_type, path_stem, sleep, строковые утилиты)
+
+## Рантайм-функции (строки и файлы)
+
+Генератор знает сигнатуры рантайм-функций (`runtime_param_types`) и автоматически добавляет `&` для `&str` параметров.
+
+Файловые: `read_file`, `write_file`, `list_dir`, `create_dir`, `path_stem`, `mime_type`
+Строковые: `starts_with`, `ends_with`, `contains`, `replace`, `find`, `find_from`, `slice_from`, `slice_range`, `split_lines`, `str_len`, `trim`

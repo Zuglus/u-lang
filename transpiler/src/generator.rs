@@ -189,7 +189,7 @@ fn has_return_value(stmts: &[Stmt]) -> bool {
         Stmt::If { body, elifs, else_body, .. } =>
             has_return_value(body) || elifs.iter().any(|(_, b)| has_return_value(b))
             || else_body.as_ref().map_or(false, |b| has_return_value(b)),
-        Stmt::ForLoop { body, .. } => has_return_value(body),
+        Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } => has_return_value(body),
         Stmt::Match { arms, .. } => arms.iter().any(|a| matches!(&a.body, Stmt::Return { value: Some(_), .. })),
         _ => false,
     })
@@ -299,6 +299,30 @@ fn is_async_function(name: &str) -> bool {
 
 fn is_async_method(method: &str) -> bool {
     matches!(method, "recv" | "accept" | "listen" | "respond" | "path")
+}
+
+fn runtime_param_types(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "read_file" => Some(&["&str"]),
+        "write_file" => Some(&["&str", "&str"]),
+        "list_dir" => Some(&["&str"]),
+        "create_dir" => Some(&["&str"]),
+        "mime_type" => Some(&["&str"]),
+        "error" => Some(&["&str"]),
+        "starts_with" => Some(&["&str", "&str"]),
+        "ends_with" => Some(&["&str", "&str"]),
+        "contains" => Some(&["&str", "&str"]),
+        "replace" => Some(&["&str", "&str", "&str"]),
+        "find" => Some(&["&str", "&str"]),
+        "find_from" => Some(&["&str", "&str", "i64"]),
+        "slice_from" => Some(&["&str", "i64"]),
+        "slice_range" => Some(&["&str", "i64", "i64"]),
+        "split_lines" => Some(&["&str"]),
+        "str_len" => Some(&["&str"]),
+        "trim" => Some(&["&str"]),
+        "path_stem" => Some(&["&str"]),
+        _ => None,
+    }
 }
 
 fn is_plain_string(expr: &Expr) -> bool {
@@ -426,13 +450,18 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         Stmt::Return { value, .. } => {
             if result_fn {
                 if let Some(val) = value {
-                    out.push_str("return Ok("); gen_expr(val, out, ctx); out.push_str(");\n");
+                    out.push_str("return Ok("); gen_expr(val, out, ctx);
+                    if is_plain_string(val) { out.push_str(".to_string()"); }
+                    out.push_str(");\n");
                 } else {
                     out.push_str("return Ok(());\n");
                 }
             } else {
                 out.push_str("return");
-                if let Some(val) = value { out.push(' '); gen_expr(val, out, ctx); }
+                if let Some(val) = value {
+                    out.push(' '); gen_expr(val, out, ctx);
+                    if is_plain_string(val) { out.push_str(".to_string()"); }
+                }
                 out.push_str(";\n");
             }
         }
@@ -491,6 +520,14 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                     if i > 0 { out.push_str(", "); }
                     let needs_ref = fn_p.get(i).and_then(|p| p.type_ann.as_deref()).map(is_ref_type).unwrap_or(false);
                     if needs_ref { out.push('&'); }
+                    gen_expr(arg, out, ctx);
+                }
+            } else if let Some(param_types) = runtime_param_types(name) {
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    if param_types.get(i) == Some(&"&str") {
+                        out.push('&');
+                    }
                     gen_expr(arg, out, ctx);
                 }
             } else {

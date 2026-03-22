@@ -224,13 +224,12 @@ pub async fn sleep(ms: i64) {
 }
 
 /// Read file contents as String
-pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<String, Box<dyn Error + Send + Sync>> {
+pub fn read_file(path: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
     Ok(std::fs::read_to_string(path)?)
 }
 
 /// Determine MIME type from file extension
-pub fn mime_type(path: impl AsRef<str>) -> String {
-    let path = path.as_ref();
+pub fn mime_type(path: &str) -> String {
     if path.ends_with(".html") || path.ends_with(".htm") { "text/html".into() }
     else if path.ends_with(".css") { "text/css".into() }
     else if path.ends_with(".js") { "application/javascript".into() }
@@ -241,6 +240,102 @@ pub fn mime_type(path: impl AsRef<str>) -> String {
     else if path.ends_with(".ico") { "image/x-icon".into() }
     else if path.ends_with(".txt") { "text/plain".into() }
     else { "application/octet-stream".into() }
+}
+
+// ─── Filesystem ─────────────────────────────────────────
+
+/// List files in a directory
+pub fn list_dir(path: &str) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        entries.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    Ok(entries)
+}
+
+/// Write content to a file
+pub fn write_file(path: &str, content: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    Ok(std::fs::write(path, content)?)
+}
+
+/// Create directory (and parents)
+pub fn create_dir(path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    Ok(std::fs::create_dir_all(path)?)
+}
+
+/// Get file stem (name without extension): "about.md" → "about"
+pub fn path_stem(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+// ─── String utilities ───────────────────────────────────
+
+/// Check if string ends with suffix
+pub fn ends_with(s: &str, suffix: &str) -> bool {
+    s.ends_with(suffix)
+}
+
+/// Check if string starts with prefix
+pub fn starts_with(s: &str, prefix: &str) -> bool {
+    s.starts_with(prefix)
+}
+
+/// Check if string contains substring
+pub fn contains(s: &str, substr: &str) -> bool {
+    s.contains(substr)
+}
+
+/// Replace all occurrences of `from` with `to`
+pub fn replace(s: &str, from: &str, to: &str) -> String {
+    s.replace(from, to)
+}
+
+/// Split string into lines
+pub fn split_lines(s: &str) -> Vec<String> {
+    s.lines().map(|l| l.to_string()).collect()
+}
+
+/// Find substring, return byte position or -1
+pub fn find(s: &str, substr: &str) -> i64 {
+    s.find(substr).map(|i| i as i64).unwrap_or(-1)
+}
+
+/// Find substring starting from byte position, return position or -1
+pub fn find_from(s: &str, substr: &str, from: i64) -> i64 {
+    let from = from.max(0) as usize;
+    if from >= s.len() { return -1; }
+    s[from..].find(substr).map(|i| (i + from) as i64).unwrap_or(-1)
+}
+
+/// Get substring from byte position to end
+pub fn slice_from(s: &str, from: i64) -> String {
+    let from = from.max(0) as usize;
+    if from >= s.len() { return String::new(); }
+    s[from..].to_string()
+}
+
+/// Get substring from byte position to byte position
+pub fn slice_range(s: &str, from: i64, to: i64) -> String {
+    let from = from.max(0) as usize;
+    let to = to.max(0) as usize;
+    if from >= s.len() || from >= to { return String::new(); }
+    let to = to.min(s.len());
+    s[from..to].to_string()
+}
+
+/// Get string length in bytes
+pub fn str_len(s: &str) -> i64 {
+    s.len() as i64
+}
+
+/// Trim whitespace from both ends
+pub fn trim(s: &str) -> String {
+    s.trim().to_string()
 }
 
 /// Catch panics — wraps std::panic::catch_unwind
@@ -261,8 +356,8 @@ pub fn catch<F: FnOnce()>(f: F) -> Result<(), String> {
 }
 
 /// Trigger a panic (catchable by catch())
-pub fn error(msg: impl AsRef<str>) {
-    panic!("{}", msg.as_ref());
+pub fn error(msg: &str) {
+    panic!("{}", msg);
 }
 
 // ─── HTTP (tokio) ────────────────────────────────────────
@@ -437,5 +532,41 @@ mod tests {
         assert_eq!("42".int().unwrap(), 42);
         assert_eq!(String::from("7").int().unwrap(), 7);
         assert!("abc".int().is_err());
+    }
+
+    #[test]
+    fn test_string_utils() {
+        assert!(starts_with("hello", "hel"));
+        assert!(!starts_with("hello", "xyz"));
+        assert!(ends_with("hello.md", ".md"));
+        assert!(contains("hello world", "world"));
+        assert_eq!(replace("hello world", "world", "U"), "hello U");
+        assert_eq!(find("hello", "ll"), 2);
+        assert_eq!(find("hello", "xyz"), -1);
+        assert_eq!(find_from("abcabc", "abc", 1), 3);
+        assert_eq!(slice_from("hello", 2), "llo");
+        assert_eq!(slice_range("hello", 1, 4), "ell");
+        assert_eq!(str_len("hello"), 5);
+        assert_eq!(trim("  hello  "), "hello");
+        assert_eq!(path_stem("about.md"), "about");
+    }
+
+    #[test]
+    fn test_split_lines() {
+        let lines = split_lines("a\nb\nc");
+        assert_eq!(lines, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_file_ops() {
+        let dir = std::env::temp_dir().join("u_test_fileops");
+        create_dir(dir.to_str().unwrap()).unwrap();
+        let fpath = format!("{}/test.txt", dir.display());
+        write_file(&fpath, "hello").unwrap();
+        let files = list_dir(dir.to_str().unwrap()).unwrap();
+        assert!(files.contains(&"test.txt".to_string()));
+        let content = read_file(&fpath).unwrap();
+        assert_eq!(content, "hello");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

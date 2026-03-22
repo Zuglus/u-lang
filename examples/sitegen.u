@@ -1,0 +1,99 @@
+// sitegen.u — статический сайт-генератор
+// Скриптовый режим: без memory(...), стандартная библиотека доступна
+
+fn replace_bold(text: String): String
+    result = ""
+    rest = slice_from(text, 0)
+    loop
+        pos = find(rest, "**")
+        if pos == -1
+            return "$(result)$(rest)"
+        end
+        result = "$(result)$(slice_range(rest, 0, pos))"
+        rest = slice_from(rest, pos + 2)
+        end_pos = find(rest, "**")
+        if end_pos == -1
+            return "$(result)**$(rest)"
+        end
+        inner = slice_range(rest, 0, end_pos)
+        result = "$(result)<strong>$(inner)</strong>"
+        rest = slice_from(rest, end_pos + 2)
+    end
+end
+
+fn replace_links(text: String): String
+    result = ""
+    rest = slice_from(text, 0)
+    loop
+        pos = find(rest, "[")
+        if pos == -1
+            return "$(result)$(rest)"
+        end
+        mid = find_from(rest, "](", pos)
+        if mid == -1
+            return "$(result)$(rest)"
+        end
+        close = find_from(rest, ")", mid + 2)
+        if close == -1
+            return "$(result)$(rest)"
+        end
+        result = "$(result)$(slice_range(rest, 0, pos))"
+        link_text = slice_range(rest, pos + 1, mid)
+        link_url = slice_range(rest, mid + 2, close)
+        result = "$(result)<a href='$(link_url)'>$(link_text)</a>"
+        rest = slice_from(rest, close + 1)
+    end
+end
+
+fn parse_inline(line: String): String
+    result = replace_bold(line)
+    result = replace_links(result)
+    return result
+end
+
+fn parse_markdown(text: String): String
+    lines = split_lines(text)
+    html = ""
+    for line in lines
+        if starts_with(line, "### ")
+            html = "$(html)<h3>$(parse_inline(slice_from(line, 4)))</h3>\n"
+        elif starts_with(line, "## ")
+            html = "$(html)<h2>$(parse_inline(slice_from(line, 3)))</h2>\n"
+        elif starts_with(line, "# ")
+            html = "$(html)<h1>$(parse_inline(slice_from(line, 2)))</h1>\n"
+        elif str_len(line) > 0
+            html = "$(html)<p>$(parse_inline(line))</p>\n"
+        end
+    end
+    return html
+end
+
+fn default_template(): String
+    return "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=utf-8>\n<title>U Site</title>\n</head>\n<body>\n{{CONTENT}}\n</body>\n</html>"
+end
+
+// --- Основная логика ---
+
+create_dir("public")?
+
+template = ""
+tpl_file = read_file("templates/page.html")
+match tpl_file
+    Ok(content): template = content
+    Err(_): template = default_template()
+end
+
+files = list_dir("content")?
+count = 0
+for file in files
+    if ends_with(file, ".md")
+        content = read_file("content/$(file)")?
+        html = parse_markdown(content)
+        stem = path_stem(file)
+        page = replace(template, "{{CONTENT}}", html)
+        write_file("public/$(stem).html", page)?
+        count = count + 1
+    end
+end
+
+print("Сгенерировано: $(count) страниц в public/")
