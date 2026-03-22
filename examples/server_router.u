@@ -1,0 +1,30 @@
+// server_router.u — HTTP-сервер с роутером
+memory(auto)
+
+use std.http: Router, Response, serve
+use std.io: print
+
+fn handle_index(request) -> Response
+    return Response.ok("<h1>Home</h1>", "text/html")
+end
+
+fn handle_about(request) -> Response
+    return Response.ok("<h1>About</h1>", "text/html")
+end
+
+fn handle_api(request) -> Response
+    return Response.json("{}")
+end
+
+fn not_found(request) -> Response
+    return Response.not_found("404")
+end
+
+router = Router.new()
+router.get("/", handle_index)
+router.get("/about", handle_about)
+router.post("/api/data", handle_api)
+router.fallback(not_found)
+
+print("Server on :3000")
+serve(router, ":3000")

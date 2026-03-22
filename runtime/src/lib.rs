@@ -9,7 +9,7 @@ use std::error::Error;
 pub use db::{Db, Row, Sqlite};
 pub use args::{Args, ParsedArgs};
 pub use concurrency::{Channel, Chan};
-pub use http::{HttpServer, HttpListener, HttpConn, Response, HttpResponse};
+pub use http::{HttpServer, HttpListener, HttpConn, Response, HttpResponse, HttpRequest, Router, URouter, serve};
 
 /// Extension trait: .int() on strings
 pub trait StrExt {
@@ -499,6 +499,15 @@ pub mod http {
                 body: body.into(),
             }
         }
+
+        pub fn json(&self, body: impl Into<String>) -> HttpResponse {
+            HttpResponse {
+                status_code: 200,
+                status_text: "OK".into(),
+                content_type: "application/json".into(),
+                body: body.into(),
+            }
+        }
     }
 
     pub struct HttpResponse {
@@ -506,6 +515,99 @@ pub mod http {
         pub status_text: String,
         pub content_type: String,
         pub body: String,
+    }
+
+    // ─── Request ──────────────────────────────────────────
+
+    #[derive(Clone, Debug)]
+    pub struct HttpRequest {
+        pub method: String,
+        pub path: String,
+    }
+
+    // ─── Router ───────────────────────────────────────────
+
+    /// Unit struct — used as `Router.new()` in U source
+    pub struct Router;
+
+    impl Router {
+        pub fn new(&self) -> URouter {
+            URouter { routes: Vec::new(), fallback: None }
+        }
+    }
+
+    /// Actual router: Vec of (method, path, handler). Linear scan — fast for small route tables.
+    pub struct URouter {
+        routes: Vec<(String, String, fn(HttpRequest) -> HttpResponse)>,
+        fallback: Option<fn(HttpRequest) -> HttpResponse>,
+    }
+
+    impl URouter {
+        pub fn get(&mut self, path: &str, handler: fn(HttpRequest) -> HttpResponse) {
+            self.routes.push(("GET".into(), path.into(), handler));
+        }
+
+        pub fn post(&mut self, path: &str, handler: fn(HttpRequest) -> HttpResponse) {
+            self.routes.push(("POST".into(), path.into(), handler));
+        }
+
+        pub fn fallback(&mut self, handler: fn(HttpRequest) -> HttpResponse) {
+            self.fallback = Some(handler);
+        }
+
+        fn dispatch(&self, method: &str, path: &str, request: HttpRequest) -> HttpResponse {
+            for (m, p, handler) in &self.routes {
+                if m == method && p == path {
+                    return handler(request);
+                }
+            }
+            if let Some(fb) = self.fallback {
+                fb(request)
+            } else {
+                HttpResponse {
+                    status_code: 404, status_text: "Not Found".into(),
+                    content_type: "text/plain".into(), body: "Not Found".into(),
+                }
+            }
+        }
+    }
+
+    // ─── serve() — Router-based server, hyper direct ─────
+
+    pub async fn serve(router: URouter, addr: &str) {
+        let bind_addr = if addr.starts_with(':') {
+            format!("0.0.0.0{}", addr)
+        } else {
+            addr.to_string()
+        };
+        let listener = TcpListener::bind(&bind_addr).await
+            .unwrap_or_else(|e| panic!("Failed to bind {}: {}", bind_addr, e));
+        let router = Arc::new(router);
+        loop {
+            let Ok((stream, _)) = listener.accept().await else { continue };
+            stream.set_nodelay(true).ok();
+            let router = router.clone();
+            tokio::spawn(async move {
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .keep_alive(true)
+                    .pipeline_flush(true)
+                    .serve_connection(TokioIo::new(stream), service_fn(move |req: Request<Incoming>| {
+                        let router = router.clone();
+                        async move {
+                            let method = req.method().as_str().to_string();
+                            let path = req.uri().path().to_string();
+                            let request = HttpRequest { method: method.clone(), path: path.clone() };
+                            let resp = router.dispatch(&method, &path, request);
+                            Ok::<_, hyper::Error>(HyperResponse::builder()
+                                .status(resp.status_code)
+                                .header("content-type", resp.content_type)
+                                .body(Full::new(Bytes::from(resp.body)))
+                                .unwrap())
+                        }
+                    }))
+                    .await;
+            });
+        }
     }
 }
 

@@ -132,7 +132,7 @@ fn expr_calls_async(e: &Expr, af: &HashSet<String>) -> bool {
 }
 
 fn map_type(t: &str) -> &str {
-    match t { "Int" => "i64", "Float" => "f64", "String" => "String", "Bool" => "bool", "Channel" => "Chan", o => o }
+    match t { "Int" => "i64", "Float" => "f64", "String" => "String", "Bool" => "bool", "Channel" => "Chan", "Response" => "HttpResponse", o => o }
 }
 
 fn map_param_type(t: &str) -> String {
@@ -216,7 +216,11 @@ fn has_return_value(stmts: &[Stmt]) -> bool {
     })
 }
 
-fn infer_param_type(param: &str, body: &[Stmt], ctx: &Ctx) -> String {
+fn infer_param_type(param: &str, body: &[Stmt], ctx: &Ctx, return_type: Option<&str>) -> String {
+    // HTTP handler: fn f(request) -> Response → param is HttpRequest
+    if return_type == Some("Response") {
+        return "HttpRequest".into();
+    }
     for stmt in body {
         if let Stmt::Match { expr, arms, .. } = stmt {
             if let Expr::Identifier { name, .. } = expr {
@@ -368,7 +372,7 @@ fn gen_stmts(stmts: &[Stmt], out: &mut String, indent: usize, ctx: &Ctx, result_
 }
 
 fn is_async_function(name: &str) -> bool {
-    matches!(name, "sleep")
+    matches!(name, "sleep" | "serve")
 }
 
 fn is_async_method(method: &str) -> bool {
@@ -468,7 +472,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                 if let Some(ref t) = p.type_ann {
                     out.push_str(&map_param_type(t));
                 } else {
-                    out.push_str(&infer_param_type(&p.name, body, ctx));
+                    out.push_str(&infer_param_type(&p.name, body, ctx, return_type.as_deref()));
                 }
             }
             out.push(')');
@@ -626,7 +630,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                         } else {
                             out.push_str(&p.name); out.push_str(": ");
                             if let Some(ref t) = p.type_ann { out.push_str(&map_param_type(t)); }
-                            else { out.push_str(&infer_param_type(&p.name, body, ctx)); }
+                            else { out.push_str(&infer_param_type(&p.name, body, ctx, return_type.as_deref())); }
                         }
                     }
                     out.push(')');
