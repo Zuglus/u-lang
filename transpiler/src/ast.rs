@@ -16,6 +16,13 @@ pub struct Variant {
 }
 
 #[derive(Debug)]
+pub struct TraitMethodSig {
+    pub name: String,
+    pub params: Vec<FnParam>,
+    pub return_type: Option<String>,
+}
+
+#[derive(Debug)]
 pub struct MatchArm {
     pub pattern: MatchPattern,
     pub body: Stmt,
@@ -63,6 +70,8 @@ pub enum Stmt {
     Loop { body: Vec<Stmt>, span: Span },
     MemoryDecl { mode: String, span: Span },
     UseDecl { path: String, imports: Vec<String>, span: Span },
+    TraitDef { name: String, methods: Vec<TraitMethodSig>, span: Span },
+    ImplBlock { trait_name: Option<String>, target: String, methods: Vec<Stmt>, span: Span },
 }
 
 #[derive(Debug)]

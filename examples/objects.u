@@ -1,0 +1,40 @@
+// objects.u — struct, impl, trait, методы через точку
+// Скриптовый режим: без memory(...)
+
+struct Counter
+    value: Int
+end
+
+impl Counter
+    fn new()
+        return Counter(value: 0)
+    end
+
+    fn get(self): Int
+        return self.value
+    end
+
+    fn increment(::self)
+        self::value = self.value + 1
+    end
+end
+
+trait Describable
+    fn describe(self): String
+end
+
+impl Describable for Counter
+    fn describe(self): String
+        return "Counter($(self.value))"
+    end
+end
+
+c = Counter.new()
+print("Start: $(c.get())")
+
+c::increment()
+c::increment()
+c::increment()
+
+print("After: $(c.get())")
+print(c.describe())

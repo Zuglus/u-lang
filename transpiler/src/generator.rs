@@ -6,11 +6,17 @@ struct Ctx {
     variant_to_enum: HashMap<String, String>,
     fn_params: HashMap<String, Vec<FnParam>>,
     async_fns: HashSet<String>,
+    line_starts: Vec<usize>,
+    filename: String,
 }
 
 impl Ctx {
-    fn from_program(program: &Program) -> Self {
-        let mut ctx = Ctx { structs: HashSet::new(), variant_to_enum: HashMap::new(), fn_params: HashMap::new(), async_fns: HashSet::new() };
+    fn new(program: &Program, source: &str, filename: &str) -> Self {
+        let mut ctx = Ctx {
+            structs: HashSet::new(), variant_to_enum: HashMap::new(),
+            fn_params: HashMap::new(), async_fns: HashSet::new(),
+            line_starts: compute_line_starts(source), filename: filename.to_string(),
+        };
         for stmt in &program.statements {
             match stmt {
                 Stmt::StructDef { name, .. } => { ctx.structs.insert(name.clone()); }
@@ -26,6 +32,21 @@ impl Ctx {
         ctx.async_fns = compute_async_fns(program);
         ctx
     }
+
+    fn line_of(&self, offset: usize) -> usize {
+        match self.line_starts.binary_search(&offset) {
+            Ok(i) => i + 1,
+            Err(i) => i,
+        }
+    }
+}
+
+fn compute_line_starts(source: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (i, c) in source.char_indices() {
+        if c == '\n' { starts.push(i + 1); }
+    }
+    starts
 }
 
 // ─── Async analysis ──────────────────────────────────────
@@ -212,8 +233,31 @@ fn infer_param_type(param: &str, body: &[Stmt], ctx: &Ctx) -> String {
     "i64".to_string()
 }
 
-pub fn generate(program: &Program) -> Result<String, String> {
-    let ctx = Ctx::from_program(program);
+fn stmt_offset(stmt: &Stmt) -> usize {
+    match stmt {
+        Stmt::Assignment { span, .. } | Stmt::ExprStmt { span, .. }
+        | Stmt::FnDef { span, .. } | Stmt::ForLoop { span, .. }
+        | Stmt::If { span, .. } | Stmt::Return { span, .. }
+        | Stmt::StructDef { span, .. } | Stmt::TypeDef { span, .. }
+        | Stmt::Match { span, .. } | Stmt::MutAssign { span, .. }
+        | Stmt::Spawn { span, .. } | Stmt::Loop { span, .. }
+        | Stmt::MemoryDecl { span, .. } | Stmt::UseDecl { span, .. }
+        | Stmt::TraitDef { span, .. } | Stmt::ImplBlock { span, .. }
+        => span.start,
+    }
+}
+
+fn infer_method_ret<'a>(body: &[Stmt], target: &'a str) -> &'a str {
+    for stmt in body {
+        if let Stmt::Return { value: Some(Expr::StructInit { name, .. }), .. } = stmt {
+            if name == target { return target; }
+        }
+    }
+    "i64"
+}
+
+pub fn generate(program: &Program, source: &str, filename: &str) -> Result<String, String> {
+    let ctx = Ctx::new(program, source, filename);
     validate_spawn_safety(program, &ctx)?;
 
     let mut out = String::new();
@@ -222,7 +266,8 @@ pub fn generate(program: &Program) -> Result<String, String> {
 
     for stmt in &program.statements {
         match stmt {
-            Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. } => {
+            Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. }
+            | Stmt::TraitDef { .. } | Stmt::ImplBlock { .. } => {
                 let mut decl = HashSet::new();
                 gen_stmt(stmt, &mut out, 0, &ctx, false, &mut decl);
                 out.push('\n');
@@ -244,7 +289,9 @@ pub fn generate(program: &Program) -> Result<String, String> {
     out.push_str("async fn _u_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {\n");
     let mut main_declared = HashSet::new();
     for stmt in &program.statements {
-        if !matches!(stmt, Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. } | Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. }) {
+        if !matches!(stmt, Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. }
+            | Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. }
+            | Stmt::TraitDef { .. } | Stmt::ImplBlock { .. }) {
             gen_stmt(stmt, &mut out, 1, &ctx, true, &mut main_declared);
         }
     }
@@ -275,6 +322,9 @@ fn validate_stmt_spawn(stmt: &Stmt, ctx: &Ctx) -> Result<(), String> {
         }
         Stmt::FnDef { body, .. } | Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } => {
             for s in body { validate_stmt_spawn(s, ctx)?; }
+        }
+        Stmt::ImplBlock { methods, .. } => {
+            for m in methods { validate_stmt_spawn(m, ctx)?; }
         }
         Stmt::If { body, elifs, else_body, .. } => {
             for s in body { validate_stmt_spawn(s, ctx)?; }
@@ -334,6 +384,16 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         return;
     }
     let pad = "    ".repeat(indent);
+    // Emit source line comment for error mapping
+    if !ctx.filename.is_empty() {
+        let line = ctx.line_of(stmt_offset(stmt));
+        if line > 0 {
+            out.push_str(&pad);
+            out.push_str("// line:");
+            out.push_str(&line.to_string());
+            out.push('\n');
+        }
+    }
     out.push_str(&pad);
     match stmt {
         Stmt::StructDef { name, fields, .. } => {
@@ -496,6 +556,75 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             out.push_str(&pad); out.push_str("    });\n");
             out.push_str(&pad); out.push_str("}\n");
         }
+        Stmt::TraitDef { name, methods, .. } => {
+            out.push_str("trait "); out.push_str(name); out.push_str(" {\n");
+            for sig in methods {
+                out.push_str(&pad); out.push_str("    fn "); out.push_str(&sig.name); out.push('(');
+                for (i, p) in sig.params.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    if p.name == "self" {
+                        out.push_str(if p.is_mut { "&mut self" } else { "&self" });
+                    } else {
+                        out.push_str(&p.name); out.push_str(": ");
+                        if let Some(ref t) = p.type_ann { out.push_str(&map_param_type(t)); }
+                        else { out.push_str("i64"); }
+                    }
+                }
+                out.push(')');
+                if let Some(ref ret) = sig.return_type {
+                    out.push_str(" -> "); out.push_str(map_type(ret));
+                }
+                out.push_str(";\n");
+            }
+            out.push_str(&pad); out.push_str("}\n");
+        }
+        Stmt::ImplBlock { trait_name, target, methods, .. } => {
+            out.push_str("impl ");
+            if let Some(tn) = trait_name { out.push_str(tn); out.push_str(" for "); }
+            out.push_str(target); out.push_str(" {\n");
+            for method in methods {
+                if let Stmt::FnDef { name, params, return_type, body, span: mspan, .. } = method {
+                    let fn_uses_q = uses_qmark(body);
+                    let has_ret = has_return_value(body);
+                    let mpad = "    ".repeat(indent + 1);
+                    // Line comment for method
+                    if !ctx.filename.is_empty() {
+                        let mline = ctx.line_of(mspan.start);
+                        out.push_str(&format!("{}// line:{}\n", mpad, mline));
+                    }
+                    out.push_str(&mpad);
+                    if ctx.async_fns.contains(name.as_str()) { out.push_str("async "); }
+                    out.push_str("fn "); out.push_str(name); out.push('(');
+                    for (i, p) in params.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        if p.name == "self" {
+                            out.push_str(if p.is_mut { "&mut self" } else { "&self" });
+                        } else {
+                            out.push_str(&p.name); out.push_str(": ");
+                            if let Some(ref t) = p.type_ann { out.push_str(&map_param_type(t)); }
+                            else { out.push_str(&infer_param_type(&p.name, body, ctx)); }
+                        }
+                    }
+                    out.push(')');
+                    if fn_uses_q {
+                        let ret = return_type.as_deref().map(map_type).unwrap_or(
+                            if has_ret { infer_method_ret(body, target) } else { "()" });
+                        out.push_str(" -> Result<"); out.push_str(ret);
+                        out.push_str(", Box<dyn std::error::Error + Send + Sync>>");
+                    } else if has_ret {
+                        let ret = return_type.as_deref().map(map_type)
+                            .unwrap_or_else(|| infer_method_ret(body, target));
+                        out.push_str(" -> "); out.push_str(ret);
+                    }
+                    out.push_str(" {\n");
+                    let mut fn_declared = HashSet::new();
+                    gen_stmts(body, out, indent + 2, ctx, fn_uses_q, &mut fn_declared);
+                    if fn_uses_q && !has_ret { out.push_str(&mpad); out.push_str("    Ok(())\n"); }
+                    out.push_str(&mpad); out.push_str("}\n");
+                }
+            }
+            out.push_str(&pad); out.push_str("}\n");
+        }
         Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. } => { /* unreachable — filtered above */ }
     }
 }
@@ -544,6 +673,15 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             gen_expr(body, out, ctx);
         }
         Expr::MethodCall { object, method, args, .. } => {
+            // Static method call: StructName.method() → StructName::method()
+            if let Expr::Identifier { name, .. } = object.as_ref() {
+                if ctx.structs.contains(name.as_str()) {
+                    out.push_str(name); out.push_str("::"); out.push_str(method);
+                    out.push('('); gen_args(args, out, ctx); out.push(')');
+                    if is_async_method(method) { out.push_str(".await"); }
+                    return;
+                }
+            }
             gen_expr(object, out, ctx);
             // exec/query with 2+ args → exec1/query1 with &second_arg
             if (method == "exec" || method == "query") && args.len() > 1 {
@@ -665,35 +803,39 @@ mod tests {
     use super::*;
     use crate::parser;
 
+    fn gen(src: &str) -> Result<String, String> {
+        generate(&parser::parse(src).unwrap(), src, "test.u")
+    }
+
     #[test]
     fn test_hello() {
-        let code = generate(&parser::parse("name = \"Мир\"\nprint(\"Привет, $name!\")").unwrap()).unwrap();
+        let code = gen("name = \"Мир\"\nprint(\"Привет, $name!\")").unwrap();
         assert!(code.contains("println!(\"Привет, {}!\", name)"));
     }
 
     #[test]
     fn test_fn_result() {
-        let code = generate(&parser::parse("fn f(): Db\n    x = Sqlite.open(\"a\")?\n    return x\nend").unwrap()).unwrap();
+        let code = gen("fn f(): Db\n    x = Sqlite.open(\"a\")?\n    return x\nend").unwrap();
         assert!(code.contains("-> Result<Db, Box<dyn std::error::Error + Send + Sync>>"));
         assert!(code.contains("return Ok(x)"));
     }
 
     #[test]
     fn test_fn_ref_params() {
-        let code = generate(&parser::parse("fn f(db: Db, t: String)\n    print(t)\nend\nf(db, title)").unwrap()).unwrap();
+        let code = gen("fn f(db: Db, t: String)\n    print(t)\nend\nf(db, title)").unwrap();
         assert!(code.contains("fn f(db: &Db, t: &str)"));
         assert!(code.contains("f(&db, &title)"));
     }
 
     #[test]
     fn test_exec1() {
-        let code = generate(&parser::parse("x = db.exec(\"sql\", val)").unwrap()).unwrap();
+        let code = gen("x = db.exec(\"sql\", val)").unwrap();
         assert!(code.contains("db.exec1(\"sql\", &val)"));
     }
 
     #[test]
     fn test_match_string() {
-        let code = generate(&parser::parse("match cmd\n    \"a\": print(\"ok\")\n    _: print(\"no\")\nend").unwrap()).unwrap();
+        let code = gen("match cmd\n    \"a\": print(\"ok\")\n    _: print(\"no\")\nend").unwrap();
         assert!(code.contains("match cmd.as_str()"));
         assert!(code.contains("\"a\" =>"));
         assert!(code.contains("_ =>"));
@@ -701,8 +843,33 @@ mod tests {
 
     #[test]
     fn test_spawn_mut_param_rejected() {
-        let result = generate(&parser::parse("fn writer(::data)\n    print(data)\nend\nspawn writer(x)").unwrap());
+        let src = "fn writer(::data)\n    print(data)\nend\nspawn writer(x)";
+        let result = generate(&parser::parse(src).unwrap(), src, "test.u");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot mutate external data"));
+    }
+
+    #[test]
+    fn test_impl_method() {
+        let src = "struct Foo\n    x: Int\nend\n\nimpl Foo\n    fn get(self): Int\n        return self.x\n    end\nend\n\nf = Foo(x: 1)\nprint(f.get())";
+        let code = gen(src).unwrap();
+        assert!(code.contains("impl Foo {"));
+        assert!(code.contains("fn get(&self) -> i64"));
+    }
+
+    #[test]
+    fn test_impl_static_method() {
+        let src = "struct Bar\n    v: Int\nend\n\nimpl Bar\n    fn new()\n        return Bar(v: 0)\n    end\nend\n\nb = Bar.new()";
+        let code = gen(src).unwrap();
+        assert!(code.contains("fn new() -> Bar"));
+        assert!(code.contains("Bar::new()"));
+    }
+
+    #[test]
+    fn test_trait_def() {
+        let src = "trait Show\n    fn show(self): String\nend";
+        let code = gen(src).unwrap();
+        assert!(code.contains("trait Show {"));
+        assert!(code.contains("fn show(&self) -> String;"));
     }
 }

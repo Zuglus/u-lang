@@ -17,7 +17,8 @@ fn is_kw(rule: Rule) -> bool {
     matches!(rule, Rule::fn_kw | Rule::for_kw | Rule::in_kw | Rule::if_kw
         | Rule::elif_kw | Rule::else_kw | Rule::end_kw | Rule::return_kw
         | Rule::struct_kw | Rule::type_kw | Rule::match_kw
-        | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw)
+        | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw
+        | Rule::trait_kw | Rule::impl_kw)
 }
 
 fn meaningful(pairs: pest::iterators::Pairs<Rule>) -> impl Iterator<Item = pest::iterators::Pair<Rule>> + '_ {
@@ -199,6 +200,64 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                 .map(|i| i.as_str().to_string())
                 .collect();
             Ok(Stmt::UseDecl { path, imports, span: s })
+        }
+        Rule::trait_def => {
+            let s = span(inner.as_span());
+            let mut p = meaningful(inner.into_inner());
+            let name = p.next().unwrap().as_str().to_string();
+            let methods = p.filter(|x| x.as_rule() == Rule::trait_method_sig).map(|sig| {
+                let mut si = meaningful(sig.into_inner());
+                let mname = si.next().unwrap().as_str().to_string();
+                let mut params = Vec::new();
+                let mut return_type = None;
+                for part in si {
+                    match part.as_rule() {
+                        Rule::fn_params => {
+                            for fp in part.into_inner() {
+                                let mut fi = fp.into_inner();
+                                let mut is_mut = false;
+                                let first = fi.next().unwrap();
+                                let pname;
+                                if first.as_rule() == Rule::mut_marker {
+                                    is_mut = true;
+                                    pname = fi.next().unwrap().as_str().to_string();
+                                } else {
+                                    pname = first.as_str().to_string();
+                                }
+                                let ptype = fi.next().map(|t| t.as_str().to_string());
+                                params.push(FnParam { name: pname, type_ann: ptype, is_mut });
+                            }
+                        }
+                        Rule::fn_ret => {
+                            return_type = Some(part.into_inner().next().unwrap().as_str().to_string());
+                        }
+                        _ => {}
+                    }
+                }
+                TraitMethodSig { name: mname, params, return_type }
+            }).collect();
+            Ok(Stmt::TraitDef { name, methods, span: s })
+        }
+        Rule::impl_block => {
+            let s = span(inner.as_span());
+            let mut p = meaningful(inner.into_inner());
+            let first_name = p.next().unwrap().as_str().to_string();
+            let mut trait_name = None;
+            let mut target = first_name.clone();
+            let mut methods = Vec::new();
+            for part in p {
+                match part.as_rule() {
+                    Rule::identifier => {
+                        trait_name = Some(first_name.clone());
+                        target = part.as_str().to_string();
+                    }
+                    Rule::fn_def => {
+                        methods.push(build_stmt_inner(part)?);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Stmt::ImplBlock { trait_name, target, methods, span: s })
         }
         _ => unreachable!("unexpected: {:?}", inner.as_rule()),
     }
