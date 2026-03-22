@@ -61,6 +61,8 @@ fn parse_markdown(text: String): String
             html = "$(html)<h2>$(parse_inline(slice_from(line, 3)))</h2>\n"
         elif starts_with(line, "# ")
             html = "$(html)<h1>$(parse_inline(slice_from(line, 2)))</h1>\n"
+        elif starts_with(line, "<")
+            html = "$(html)$(line)\n"
         elif str_len(line) > 0
             html = "$(html)<p>$(parse_inline(line))</p>\n"
         end
