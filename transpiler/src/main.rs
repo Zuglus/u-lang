@@ -83,6 +83,7 @@ edition = "2021"
 
 [dependencies]
 u-runtime = {{ path = "{}" }}
+tokio = {{ version = "1", features = ["full"] }}
 "#,
         runtime_path.display()
     );

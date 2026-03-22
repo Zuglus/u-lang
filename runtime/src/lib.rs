@@ -1,6 +1,6 @@
 //! U Language Runtime
 //!
-//! Provides Sqlite, Args, and string extensions for U scripts.
+//! Provides Sqlite, Args, concurrency (tokio), HTTP, and string extensions for U scripts.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -13,17 +13,17 @@ pub use http::{HttpServer, HttpListener, HttpConn, Response, HttpResponse};
 
 /// Extension trait: .int() on strings
 pub trait StrExt {
-    fn int(&self) -> Result<i64, Box<dyn Error>>;
+    fn int(&self) -> Result<i64, Box<dyn Error + Send + Sync>>;
 }
 
 impl StrExt for String {
-    fn int(&self) -> Result<i64, Box<dyn Error>> {
+    fn int(&self) -> Result<i64, Box<dyn Error + Send + Sync>> {
         Ok(self.parse::<i64>()?)
     }
 }
 
 impl StrExt for str {
-    fn int(&self) -> Result<i64, Box<dyn Error>> {
+    fn int(&self) -> Result<i64, Box<dyn Error + Send + Sync>> {
         Ok(self.parse::<i64>()?)
     }
 }
@@ -38,7 +38,7 @@ pub mod db {
     pub struct Sqlite;
 
     impl Sqlite {
-        pub fn open(&self, path: &str) -> Result<Db, Box<dyn Error>> {
+        pub fn open(&self, path: &str) -> Result<Db, Box<dyn Error + Send + Sync>> {
             let conn = Connection::open(path)?;
             Ok(Db { conn })
         }
@@ -64,30 +64,30 @@ pub mod db {
 
     impl Db {
         /// Execute without params
-        pub fn exec(&self, sql: &str) -> Result<(), Box<dyn Error>> {
+        pub fn exec(&self, sql: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             let sql = convert_params(sql);
             self.conn.execute(&sql, ())?;
             Ok(())
         }
 
         /// Execute with one param (any type implementing ToSql)
-        pub fn exec1<T: rusqlite::types::ToSql>(&self, sql: &str, param: &T) -> Result<(), Box<dyn Error>> {
+        pub fn exec1<T: rusqlite::types::ToSql>(&self, sql: &str, param: &T) -> Result<(), Box<dyn Error + Send + Sync>> {
             let sql = convert_params(sql);
             self.conn.execute(&sql, [param as &dyn rusqlite::types::ToSql])?;
             Ok(())
         }
 
         /// Query without params
-        pub fn query(&self, sql: &str) -> Result<Vec<Row>, Box<dyn Error>> {
+        pub fn query(&self, sql: &str) -> Result<Vec<Row>, Box<dyn Error + Send + Sync>> {
             self.query_internal(&convert_params(sql), ())
         }
 
         /// Query with one param
-        pub fn query1<T: rusqlite::types::ToSql>(&self, sql: &str, param: &T) -> Result<Vec<Row>, Box<dyn Error>> {
+        pub fn query1<T: rusqlite::types::ToSql>(&self, sql: &str, param: &T) -> Result<Vec<Row>, Box<dyn Error + Send + Sync>> {
             self.query_internal(&convert_params(sql), [param as &dyn rusqlite::types::ToSql])
         }
 
-        fn query_internal<P: rusqlite::Params>(&self, sql: &str, params: P) -> Result<Vec<Row>, Box<dyn Error>> {
+        fn query_internal<P: rusqlite::Params>(&self, sql: &str, params: P) -> Result<Vec<Row>, Box<dyn Error + Send + Sync>> {
             let mut stmt = self.conn.prepare(sql)?;
             let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
             let rows = stmt.query_map(params, |row| {
@@ -106,7 +106,7 @@ pub mod db {
                 }
                 Ok(Row { data })
             })?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
         }
     }
 
@@ -175,8 +175,7 @@ pub mod args {
     }
 
     impl ParsedArgs {
-        /// Get a required argument. Joins all positional args (for multi-word values).
-        pub fn require(&self, _name: &str) -> Result<String, Box<dyn Error>> {
+        pub fn require(&self, _name: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
             if self.positional.is_empty() {
                 return Err(format!("Отсутствует аргумент: <{}>", _name).into());
             }
@@ -185,26 +184,27 @@ pub mod args {
     }
 }
 
-// ─── Concurrency ─────────────────────────────────────────
+// ─── Concurrency (tokio) ─────────────────────────────────
 
 pub mod concurrency {
-    use std::sync::{mpsc, Arc, Mutex};
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
 
     /// Unit struct — used as `Channel.new()` in U source
     pub struct Channel;
 
     impl Channel {
         pub fn new(&self) -> Chan {
-            let (tx, rx) = mpsc::channel();
+            let (tx, rx) = mpsc::unbounded_channel();
             Chan { tx, rx: Arc::new(Mutex::new(rx)) }
         }
     }
 
-    /// The actual channel value, cloneable across threads
+    /// The actual channel value, cloneable across tasks
     #[derive(Clone)]
     pub struct Chan {
-        tx: mpsc::Sender<String>,
-        rx: Arc<Mutex<mpsc::Receiver<String>>>,
+        tx: mpsc::UnboundedSender<String>,
+        rx: Arc<Mutex<mpsc::UnboundedReceiver<String>>>,
     }
 
     impl Chan {
@@ -212,19 +212,19 @@ pub mod concurrency {
             let _ = self.tx.send(msg.to_string());
         }
 
-        pub fn recv(&self) -> String {
-            self.rx.lock().unwrap().recv().unwrap_or_default()
+        pub async fn recv(&self) -> String {
+            self.rx.lock().await.recv().await.unwrap_or_default()
         }
     }
 }
 
-/// Sleep for given milliseconds
-pub fn sleep(ms: i64) {
-    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+/// Sleep for given milliseconds (async, yields to tokio runtime)
+pub async fn sleep(ms: i64) {
+    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
 }
 
 /// Read file contents as String
-pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<String, Box<dyn Error>> {
+pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<String, Box<dyn Error + Send + Sync>> {
     Ok(std::fs::read_to_string(path)?)
 }
 
@@ -265,25 +265,26 @@ pub fn error(msg: impl AsRef<str>) {
     panic!("{}", msg.as_ref());
 }
 
-// ─── HTTP ────────────────────────────────────────────────
+// ─── HTTP (tokio) ────────────────────────────────────────
 
 pub mod http {
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
     use std::error::Error;
 
     /// Unit struct — used as `HttpServer.listen(":3000")` in U source
     pub struct HttpServer;
 
     impl HttpServer {
-        pub fn listen(&self, addr: &str) -> Result<HttpListener, Box<dyn Error>> {
+        pub async fn listen(&self, addr: &str) -> Result<HttpListener, Box<dyn Error + Send + Sync>> {
             let bind_addr = if addr.starts_with(':') {
                 format!("0.0.0.0{}", addr)
             } else {
                 addr.to_string()
             };
-            let listener = TcpListener::bind(&bind_addr)?;
+            let listener = TcpListener::bind(&bind_addr).await?;
             Ok(HttpListener { listener })
         }
     }
@@ -293,10 +294,10 @@ pub mod http {
     }
 
     impl HttpListener {
-        pub fn accept(&self) -> Result<HttpConn, Box<dyn Error>> {
-            let (mut stream, _) = self.listener.accept()?;
+        pub async fn accept(&self) -> Result<HttpConn, Box<dyn Error + Send + Sync>> {
+            let (mut stream, _) = self.listener.accept().await?;
             let mut buf = [0u8; 4096];
-            let n = stream.read(&mut buf)?;
+            let n = stream.read(&mut buf).await?;
             let request = String::from_utf8_lossy(&buf[..n]);
             let path = parse_path(&request);
             Ok(HttpConn { stream: Arc::new(Mutex::new(stream)), request_path: path })
@@ -324,16 +325,15 @@ pub mod http {
             self.request_path.clone()
         }
 
-        pub fn respond(&self, response: HttpResponse) {
-            if let Ok(mut stream) = self.stream.lock() {
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    response.status_code, response.status_text,
-                    response.content_type, response.body.len(), response.body
-                );
-                let _ = stream.flush();
-            }
+        pub async fn respond(&self, response: HttpResponse) {
+            let mut stream = self.stream.lock().await;
+            let resp = format!(
+                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.status_code, response.status_text,
+                response.content_type, response.body.len(), response.body
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.flush().await;
         }
     }
 
@@ -401,12 +401,12 @@ mod tests {
         assert_eq!(rows[0].int("v"), 42);
     }
 
-    #[test]
-    fn test_channel() {
+    #[tokio::test]
+    async fn test_channel() {
         let ch = Channel.new();
         let ch2 = ch.clone();
-        std::thread::spawn(move || { ch2.send("hello"); });
-        let msg = ch.recv();
+        tokio::spawn(async move { ch2.send("hello"); });
+        let msg = ch.recv().await;
         assert_eq!(msg, "hello");
     }
 

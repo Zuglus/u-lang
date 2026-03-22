@@ -5,11 +5,12 @@ struct Ctx {
     structs: HashSet<String>,
     variant_to_enum: HashMap<String, String>,
     fn_params: HashMap<String, Vec<FnParam>>,
+    async_fns: HashSet<String>,
 }
 
 impl Ctx {
     fn from_program(program: &Program) -> Self {
-        let mut ctx = Ctx { structs: HashSet::new(), variant_to_enum: HashMap::new(), fn_params: HashMap::new() };
+        let mut ctx = Ctx { structs: HashSet::new(), variant_to_enum: HashMap::new(), fn_params: HashMap::new(), async_fns: HashSet::new() };
         for stmt in &program.statements {
             match stmt {
                 Stmt::StructDef { name, .. } => { ctx.structs.insert(name.clone()); }
@@ -22,7 +23,90 @@ impl Ctx {
                 _ => {}
             }
         }
+        ctx.async_fns = compute_async_fns(program);
         ctx
+    }
+}
+
+// ─── Async analysis ──────────────────────────────────────
+
+fn compute_async_fns(program: &Program) -> HashSet<String> {
+    let mut fn_bodies: HashMap<&str, &[Stmt]> = HashMap::new();
+    for stmt in &program.statements {
+        if let Stmt::FnDef { name, body, .. } = stmt {
+            fn_bodies.insert(name, body);
+        }
+    }
+    // Seed: functions that directly use async runtime operations
+    let mut async_fns = HashSet::new();
+    for (&name, body) in &fn_bodies {
+        if stmts_need_async(body) { async_fns.insert(name.to_string()); }
+    }
+    // Fixed-point: propagate through call graph
+    loop {
+        let mut changed = false;
+        for (&name, body) in &fn_bodies {
+            if !async_fns.contains(name) && stmts_call_any_async(body, &async_fns) {
+                async_fns.insert(name.to_string());
+                changed = true;
+            }
+        }
+        if !changed { break; }
+    }
+    async_fns
+}
+
+fn stmts_need_async(stmts: &[Stmt]) -> bool { stmts.iter().any(stmt_needs_async) }
+fn stmt_needs_async(s: &Stmt) -> bool {
+    match s {
+        Stmt::ExprStmt { expr, .. } | Stmt::Assignment { value: expr, .. } => expr_needs_async(expr),
+        Stmt::Return { value: Some(e), .. } => expr_needs_async(e),
+        Stmt::If { condition, body, elifs, else_body, .. } =>
+            expr_needs_async(condition) || stmts_need_async(body)
+            || elifs.iter().any(|(c, b)| expr_needs_async(c) || stmts_need_async(b))
+            || else_body.as_ref().map_or(false, |b| stmts_need_async(b)),
+        Stmt::ForLoop { iter, body, .. } => expr_needs_async(iter) || stmts_need_async(body),
+        Stmt::Loop { body, .. } => stmts_need_async(body),
+        Stmt::Match { expr, arms, .. } => expr_needs_async(expr) || arms.iter().any(|a| stmt_needs_async(&a.body)),
+        _ => false,
+    }
+}
+fn expr_needs_async(e: &Expr) -> bool {
+    match e {
+        Expr::FunctionCall { name, args, .. } => is_async_function(name) || args.iter().any(expr_needs_async),
+        Expr::MethodCall { object, method, args, .. } => is_async_method(method) || expr_needs_async(object) || args.iter().any(expr_needs_async),
+        Expr::BinaryOp { left, right, .. } => expr_needs_async(left) || expr_needs_async(right),
+        Expr::UnaryOp { expr, .. } | Expr::PostfixOp { expr, .. } => expr_needs_async(expr),
+        Expr::FieldAccess { object, .. } => expr_needs_async(object),
+        Expr::StructInit { fields, .. } => fields.iter().any(|(_, v)| expr_needs_async(v)),
+        _ => false,
+    }
+}
+
+fn stmts_call_any_async(stmts: &[Stmt], af: &HashSet<String>) -> bool { stmts.iter().any(|s| stmt_calls_async(s, af)) }
+fn stmt_calls_async(s: &Stmt, af: &HashSet<String>) -> bool {
+    match s {
+        Stmt::ExprStmt { expr, .. } | Stmt::Assignment { value: expr, .. } => expr_calls_async(expr, af),
+        Stmt::Return { value: Some(e), .. } => expr_calls_async(e, af),
+        Stmt::If { condition, body, elifs, else_body, .. } =>
+            expr_calls_async(condition, af) || stmts_call_any_async(body, af)
+            || elifs.iter().any(|(c, b)| expr_calls_async(c, af) || stmts_call_any_async(b, af))
+            || else_body.as_ref().map_or(false, |b| stmts_call_any_async(b, af)),
+        Stmt::ForLoop { iter, body, .. } => expr_calls_async(iter, af) || stmts_call_any_async(body, af),
+        Stmt::Loop { body, .. } => stmts_call_any_async(body, af),
+        Stmt::Match { expr, arms, .. } => expr_calls_async(expr, af) || arms.iter().any(|a| stmt_calls_async(&a.body, af)),
+        _ => false,
+    }
+}
+fn expr_calls_async(e: &Expr, af: &HashSet<String>) -> bool {
+    match e {
+        Expr::FunctionCall { name, args, .. } => af.contains(name.as_str()) || args.iter().any(|a| expr_calls_async(a, af)),
+        Expr::MethodCall { object, args, .. } => expr_calls_async(object, af) || args.iter().any(|a| expr_calls_async(a, af)),
+        Expr::BinaryOp { left, right, .. } => expr_calls_async(left, af) || expr_calls_async(right, af),
+        Expr::UnaryOp { expr, .. } | Expr::PostfixOp { expr, .. } => expr_calls_async(expr, af),
+        Expr::FieldAccess { object, .. } => expr_calls_async(object, af),
+        Expr::StructInit { fields, .. } => fields.iter().any(|(_, v)| expr_calls_async(v, af)),
+        _ => false,
     }
 }
 
@@ -147,15 +231,17 @@ pub fn generate(program: &Program) -> Result<String, String> {
         }
     }
 
-    out.push_str("fn main() {\n");
+    out.push_str("#[tokio::main]\nasync fn main() {\n");
     out.push_str("    std::panic::set_hook(Box::new(|info| {\n");
     out.push_str("        if std::thread::current().name() == Some(\"main\") {\n");
     out.push_str("            eprintln!(\"{}\", info);\n");
+    out.push_str("        } else {\n");
+    out.push_str("            eprintln!(\"goroutine panic: {}\", info);\n");
     out.push_str("        }\n");
     out.push_str("    }));\n");
-    out.push_str("    if let Err(e) = _u_main() { eprintln!(\"Ошибка: {}\", e); std::process::exit(1); }\n");
+    out.push_str("    if let Err(e) = _u_main().await { eprintln!(\"Ошибка: {}\", e); std::process::exit(1); }\n");
     out.push_str("}\n\n");
-    out.push_str("fn _u_main() -> Result<(), Box<dyn std::error::Error>> {\n");
+    out.push_str("async fn _u_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {\n");
     let mut main_declared = HashSet::new();
     for stmt in &program.statements {
         if !matches!(stmt, Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. } | Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. }) {
@@ -205,6 +291,14 @@ fn validate_stmt_spawn(stmt: &Stmt, ctx: &Ctx) -> Result<(), String> {
 
 fn gen_stmts(stmts: &[Stmt], out: &mut String, indent: usize, ctx: &Ctx, result_fn: bool, declared: &mut HashSet<String>) {
     for stmt in stmts { gen_stmt(stmt, out, indent, ctx, result_fn, declared); }
+}
+
+fn is_async_function(name: &str) -> bool {
+    matches!(name, "sleep")
+}
+
+fn is_async_method(method: &str) -> bool {
+    matches!(method, "recv" | "accept" | "listen" | "respond")
 }
 
 fn is_plain_string(expr: &Expr) -> bool {
@@ -258,6 +352,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         Stmt::FnDef { name, params, return_type, body, .. } => {
             let fn_uses_q = uses_qmark(body);
             let has_ret = has_return_value(body);
+            if ctx.async_fns.contains(name) { out.push_str("async "); }
             out.push_str("fn "); out.push_str(name); out.push('(');
             for (i, p) in params.iter().enumerate() {
                 if i > 0 { out.push_str(", "); }
@@ -271,7 +366,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             out.push(')');
             if fn_uses_q {
                 let ret = return_type.as_deref().map(map_type).unwrap_or(if has_ret { "i64" } else { "()" });
-                out.push_str(" -> Result<"); out.push_str(ret); out.push_str(", Box<dyn std::error::Error>>");
+                out.push_str(" -> Result<"); out.push_str(ret); out.push_str(", Box<dyn std::error::Error + Send + Sync>>");
             } else if has_ret {
                 let ret = return_type.as_deref().map(map_type).unwrap_or("i64");
                 out.push_str(" -> "); out.push_str(ret);
@@ -351,8 +446,13 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::Spawn { expr, .. } => {
+            // Unwrap lambda — spawn fn() expr is equivalent to spawn expr
+            let spawn_body = match expr {
+                Expr::Lambda { body, .. } => body.as_ref(),
+                _ => expr,
+            };
             // Clone captured variables so move closure works
-            let mut vars = collect_free_vars(expr);
+            let mut vars = collect_free_vars(spawn_body);
             vars.sort(); vars.dedup();
             vars.retain(|v| !ctx.fn_params.contains_key(v));
             out.push_str("{\n");
@@ -360,14 +460,10 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                 out.push_str(&pad); out.push_str("    let ");
                 out.push_str(v); out.push_str(" = "); out.push_str(v); out.push_str(".clone();\n");
             }
-            out.push_str(&pad); out.push_str("    std::thread::spawn(move || {\n");
-            out.push_str(&pad); out.push_str("        if let Err(e) = catch(|| {\n");
-            out.push_str(&pad); out.push_str("            ");
-            gen_expr(expr, out, ctx);
+            out.push_str(&pad); out.push_str("    tokio::spawn(async move {\n");
+            out.push_str(&pad); out.push_str("        ");
+            gen_expr(spawn_body, out, ctx);
             out.push_str(";\n");
-            out.push_str(&pad); out.push_str("        }) {\n");
-            out.push_str(&pad); out.push_str("            eprintln!(\"goroutine panic: {}\", e);\n");
-            out.push_str(&pad); out.push_str("        }\n");
             out.push_str(&pad); out.push_str("    });\n");
             out.push_str(&pad); out.push_str("}\n");
         }
@@ -401,6 +497,10 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 gen_args(args, out, ctx);
             }
             out.push(')');
+            // .await for async functions (user-defined async + runtime async)
+            if ctx.async_fns.contains(name.as_str()) || is_async_function(name) {
+                out.push_str(".await");
+            }
         }
         Expr::Lambda { params, body, .. } => {
             out.push('|'); out.push_str(&params.join(", ")); out.push_str("| ");
@@ -418,6 +518,10 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 out.push(')');
             } else {
                 out.push('.'); out.push_str(method); out.push('('); gen_args(args, out, ctx); out.push(')');
+            }
+            // .await for async methods
+            if is_async_method(method) {
+                out.push_str(".await");
             }
         }
         Expr::FieldAccess { object, field, .. } => {
@@ -533,7 +637,7 @@ mod tests {
     #[test]
     fn test_fn_result() {
         let code = generate(&parser::parse("fn f(): Db\n    x = Sqlite.open(\"a\")?\n    return x\nend").unwrap()).unwrap();
-        assert!(code.contains("-> Result<Db, Box<dyn std::error::Error>>"));
+        assert!(code.contains("-> Result<Db, Box<dyn std::error::Error + Send + Sync>>"));
         assert!(code.contains("return Ok(x)"));
     }
 
