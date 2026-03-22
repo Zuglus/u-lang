@@ -15,8 +15,8 @@ fn handle(conn: HttpConn)
         end
         file = read_file("public$(path)")
         match file
-            Ok(content): conn.respond(Response.ok(content, mime_type(path)))
-            Err(_): conn.respond(Response.not_found("404 Not Found"))
+            Ok(content) => conn.respond(Response.ok(content, mime_type(path)))
+            Err(_) => conn.respond(Response.not_found("404 Not Found"))
         end
     end
 end

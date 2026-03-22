@@ -256,13 +256,37 @@ fn infer_method_ret<'a>(body: &[Stmt], target: &'a str) -> &'a str {
     "i64"
 }
 
-pub fn generate(program: &Program, source: &str, filename: &str) -> Result<String, String> {
+pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[String]) -> Result<String, String> {
     let ctx = Ctx::new(program, source, filename);
     validate_spawn_safety(program, &ctx)?;
 
     let mut out = String::new();
     out.push_str("#![allow(unused_mut, unused_variables, dead_code, unused_imports)]\n");
-    out.push_str("use u_runtime::*;\n\n");
+    out.push_str("use u_runtime::*;\n");
+
+    // Emit mod declarations for .rs modules
+    for m in rs_modules {
+        out.push_str("mod "); out.push_str(m); out.push_str(";\n");
+    }
+
+    // Emit use statements for local .rs module imports
+    for stmt in &program.statements {
+        if let Stmt::UseDecl { path, imports, .. } = stmt {
+            if rs_modules.iter().any(|m| m == path) {
+                out.push_str("use "); out.push_str(path); out.push_str("::");
+                if imports.len() == 1 {
+                    out.push_str(&imports[0]);
+                } else {
+                    out.push('{');
+                    out.push_str(&imports.join(", "));
+                    out.push('}');
+                }
+                out.push_str(";\n");
+            }
+        }
+    }
+
+    out.push('\n');
 
     for stmt in &program.statements {
         match stmt {
@@ -804,7 +828,7 @@ mod tests {
     use crate::parser;
 
     fn gen(src: &str) -> Result<String, String> {
-        generate(&parser::parse(src).unwrap(), src, "test.u")
+        generate(&parser::parse(src).unwrap(), src, "test.u", &[])
     }
 
     #[test]
@@ -815,7 +839,7 @@ mod tests {
 
     #[test]
     fn test_fn_result() {
-        let code = gen("fn f(): Db\n    x = Sqlite.open(\"a\")?\n    return x\nend").unwrap();
+        let code = gen("fn f() -> Db\n    x = Sqlite.open(\"a\")?\n    return x\nend").unwrap();
         assert!(code.contains("-> Result<Db, Box<dyn std::error::Error + Send + Sync>>"));
         assert!(code.contains("return Ok(x)"));
     }
@@ -835,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_match_string() {
-        let code = gen("match cmd\n    \"a\": print(\"ok\")\n    _: print(\"no\")\nend").unwrap();
+        let code = gen("match cmd\n    \"a\" => print(\"ok\")\n    _ => print(\"no\")\nend").unwrap();
         assert!(code.contains("match cmd.as_str()"));
         assert!(code.contains("\"a\" =>"));
         assert!(code.contains("_ =>"));
@@ -844,14 +868,14 @@ mod tests {
     #[test]
     fn test_spawn_mut_param_rejected() {
         let src = "fn writer(::data)\n    print(data)\nend\nspawn writer(x)";
-        let result = generate(&parser::parse(src).unwrap(), src, "test.u");
+        let result = generate(&parser::parse(src).unwrap(), src, "test.u", &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot mutate external data"));
     }
 
     #[test]
     fn test_impl_method() {
-        let src = "struct Foo\n    x: Int\nend\n\nimpl Foo\n    fn get(self): Int\n        return self.x\n    end\nend\n\nf = Foo(x: 1)\nprint(f.get())";
+        let src = "struct Foo\n    x: Int\nend\n\nimpl Foo\n    fn get(self) -> Int\n        return self.x\n    end\nend\n\nf = Foo(x: 1)\nprint(f.get())";
         let code = gen(src).unwrap();
         assert!(code.contains("impl Foo {"));
         assert!(code.contains("fn get(&self) -> i64"));
@@ -867,7 +891,7 @@ mod tests {
 
     #[test]
     fn test_trait_def() {
-        let src = "trait Show\n    fn show(self): String\nend";
+        let src = "trait Show\n    fn show(self) -> String\nend";
         let code = gen(src).unwrap();
         assert!(code.contains("trait Show {"));
         assert!(code.contains("fn show(&self) -> String;"));

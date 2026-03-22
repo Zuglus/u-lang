@@ -1,6 +1,6 @@
 // todo.u — CLI-утилита для задач
 
-fn init_db(): Db
+fn init_db() -> Db
     db = Sqlite.open("todos.db")?
     db.exec("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, done INTEGER DEFAULT 0)")?
     return db
@@ -48,9 +48,9 @@ db = init_db()?
 args = Args.parse()
 
 match args.command
-    "list": list_todos(db)?
-    "add": add_todo(db, args.require("title")?)?
-    "done": done_todo(db, args.require("id")?.int()?)?
-    "remove": remove_todo(db, args.require("id")?.int()?)?
-    _: show_usage()
+    "list" => list_todos(db)?
+    "add" => add_todo(db, args.require("title")?)?
+    "done" => done_todo(db, args.require("id")?.int()?)?
+    "remove" => remove_todo(db, args.require("id")?.int()?)?
+    _ => show_usage()
 end

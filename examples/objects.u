@@ -10,7 +10,7 @@ impl Counter
         return Counter(value: 0)
     end
 
-    fn get(self): Int
+    fn get(self) -> Int
         return self.value
     end
 
@@ -20,11 +20,11 @@ impl Counter
 end
 
 trait Describable
-    fn describe(self): String
+    fn describe(self) -> String
 end
 
 impl Describable for Counter
-    fn describe(self): String
+    fn describe(self) -> String
         return "Counter($(self.value))"
     end
 end

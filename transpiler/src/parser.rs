@@ -16,7 +16,7 @@ fn span(s: pest::Span) -> Span { Span { start: s.start(), end: s.end() } }
 fn is_kw(rule: Rule) -> bool {
     matches!(rule, Rule::fn_kw | Rule::for_kw | Rule::in_kw | Rule::if_kw
         | Rule::elif_kw | Rule::else_kw | Rule::end_kw | Rule::return_kw
-        | Rule::struct_kw | Rule::type_kw | Rule::match_kw
+        | Rule::struct_kw | Rule::enum_kw | Rule::match_kw
         | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw
         | Rule::trait_kw | Rule::impl_kw)
 }
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_fn_typed_params() {
-        let p = parse("fn add(db: Db, x: Int): Int\n    return x\nend").unwrap();
+        let p = parse("fn add(db: Db, x: Int) -> Int\n    return x\nend").unwrap();
         match &p.statements[0] {
             Stmt::FnDef { params, return_type, .. } => {
                 assert_eq!(params[0].type_ann.as_deref(), Some("Db"));
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_match_strings() {
-        let p = parse("match cmd\n    \"list\": print(\"ok\")\n    _: print(\"no\")\nend").unwrap();
+        let p = parse("match cmd\n    \"list\" => print(\"ok\")\n    _ => print(\"no\")\nend").unwrap();
         match &p.statements[0] {
             Stmt::Match { arms, .. } => {
                 assert!(matches!(&arms[0].pattern, MatchPattern::StringLit(s) if s == "list"));

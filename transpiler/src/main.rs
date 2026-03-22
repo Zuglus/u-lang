@@ -58,7 +58,23 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     let source = std::fs::read_to_string(path)?;
     let ast = u::parser::parse(&source)?;
     let u_filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("input.u");
-    let rust_code = u::generator::generate(&ast, &source, u_filename)
+
+    // Find .rs files in the same directory as the .u file
+    let u_dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let mut rs_modules: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(u_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    rs_modules.push(stem.to_string());
+                }
+            }
+        }
+    }
+    rs_modules.sort();
+
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &rs_modules)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let stem = path
@@ -95,6 +111,13 @@ tokio = {{ version = "1", features = ["full"] }}
         .unwrap_or(true);
     if needs_update {
         std::fs::write(&cargo_path, &cargo_toml)?;
+    }
+
+    // Copy .rs module files to generated project
+    for module in &rs_modules {
+        let src_file = u_dir.join(format!("{}.rs", module));
+        let dst_file = src_dir.join(format!("{}.rs", module));
+        std::fs::copy(&src_file, &dst_file)?;
     }
 
     // Write generated source

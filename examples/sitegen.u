@@ -1,7 +1,7 @@
 // sitegen.u — статический сайт-генератор
 // Скриптовый режим: без memory(...), стандартная библиотека доступна
 
-fn replace_bold(text: String): String
+fn replace_bold(text: String) -> String
     result = ""
     rest = slice_from(text, 0)
     loop
@@ -21,7 +21,7 @@ fn replace_bold(text: String): String
     end
 end
 
-fn replace_links(text: String): String
+fn replace_links(text: String) -> String
     result = ""
     rest = slice_from(text, 0)
     loop
@@ -45,13 +45,13 @@ fn replace_links(text: String): String
     end
 end
 
-fn parse_inline(line: String): String
+fn parse_inline(line: String) -> String
     result = replace_bold(line)
     result = replace_links(result)
     return result
 end
 
-fn parse_markdown(text: String): String
+fn parse_markdown(text: String) -> String
     lines = split_lines(text)
     html = ""
     for line in lines
@@ -70,7 +70,7 @@ fn parse_markdown(text: String): String
     return html
 end
 
-fn default_template(): String
+fn default_template() -> String
     return "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=utf-8>\n<title>U Site</title>\n</head>\n<body>\n{{CONTENT}}\n</body>\n</html>"
 end
 
@@ -81,8 +81,8 @@ create_dir("public")?
 template = ""
 tpl_file = read_file("templates/page.html")
 match tpl_file
-    Ok(content): template = content
-    Err(_): template = default_template()
+    Ok(content) => template = content
+    Err(_) => template = default_template()
 end
 
 files = list_dir("content")?

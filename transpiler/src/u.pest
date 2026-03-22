@@ -12,7 +12,7 @@ use_path    = @{ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_" | ".")* }
 use_items   = { identifier ~ ("," ~ identifier)* }
 
 struct_def  = { struct_kw ~ identifier ~ NEWLINE+ ~ (typed_field ~ NEWLINE+)* ~ end_kw }
-type_def    = { type_kw ~ identifier ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
+type_def    = { enum_kw ~ identifier ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
 trait_def        = { trait_kw ~ identifier ~ NEWLINE+ ~ (trait_method_sig ~ NEWLINE+)* ~ end_kw }
 trait_method_sig = { fn_kw ~ identifier ~ "(" ~ fn_params? ~ ")" ~ fn_ret? }
 impl_block       = { impl_kw ~ identifier ~ (for_kw ~ identifier)? ~ NEWLINE+ ~ (fn_def ~ NEWLINE+)* ~ end_kw }
@@ -31,14 +31,14 @@ expr_stmt   = { expression }
 fn_params = { fn_param ~ ("," ~ fn_param)* }
 fn_param   = { mut_marker? ~ identifier ~ (":" ~ identifier)? }
 mut_marker = { "::" }
-fn_ret    = { ":" ~ identifier }
+fn_ret    = { "->" ~ identifier }
 
 // Struct / type fields
 typed_field  = { identifier ~ ":" ~ identifier }
 type_variant = { identifier ~ "(" ~ typed_field ~ ("," ~ typed_field)* ~ ")" }
 
 // Match — supports variant, string, and wildcard patterns
-match_arm       = { match_pattern ~ ":" ~ match_arm_body }
+match_arm       = { match_pattern ~ "=>" ~ match_arm_body }
 match_pattern   = { variant_pattern | string_literal | match_wildcard }
 variant_pattern = { identifier ~ "(" ~ match_bindings? ~ ")" }
 match_bindings  = { identifier ~ ("," ~ identifier)* }
@@ -105,7 +105,7 @@ expression_entry = { SOI ~ expression ~ EOI }
 identifier   = @{ !keyword ~ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_")* }
 keyword      = _{ ("if" | "elif" | "else" | "end" | "for" | "while" | "fn" | "return"
                  | "true" | "false" | "and" | "or" | "not" | "in" | "match" | "struct"
-                 | "type" | "trait" | "impl" | "use" | "memory" | "public" | "unsafe"
+                 | "enum" | "trait" | "impl" | "use" | "memory" | "pub" | "unsafe"
                  | "weak" | "test" | "spawn" | "loop" | "pass") ~ !(LETTER | ASCII_DIGIT | "_") }
 bool_literal = @{ ("true" | "false") ~ !(LETTER | ASCII_DIGIT | "_") }
 number       = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
@@ -120,7 +120,7 @@ else_kw   = @{ "else" ~ !(LETTER | ASCII_DIGIT | "_") }
 end_kw    = @{ "end" ~ !(LETTER | ASCII_DIGIT | "_") }
 return_kw = @{ "return" ~ !(LETTER | ASCII_DIGIT | "_") }
 struct_kw = @{ "struct" ~ !(LETTER | ASCII_DIGIT | "_") }
-type_kw   = @{ "type" ~ !(LETTER | ASCII_DIGIT | "_") }
+enum_kw   = @{ "enum" ~ !(LETTER | ASCII_DIGIT | "_") }
 match_kw  = @{ "match" ~ !(LETTER | ASCII_DIGIT | "_") }
 spawn_kw  = @{ "spawn" ~ !(LETTER | ASCII_DIGIT | "_") }
 loop_kw   = @{ "loop" ~ !(LETTER | ASCII_DIGIT | "_") }

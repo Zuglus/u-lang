@@ -1,0 +1,5 @@
+// вызываем Rust-функцию из U
+use fast_math: fibonacci
+
+result = fibonacci(50)
+print("fib(50) = $result")

@@ -360,14 +360,22 @@ pub fn error(msg: &str) {
     panic!("{}", msg);
 }
 
-// ─── HTTP (tokio) ────────────────────────────────────────
+// ─── HTTP (hyper) ─────────────────────────────────────────
 
 pub mod http {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::error::Error;
+    use tokio::net::TcpListener;
+    use tokio::sync::Notify;
+    use hyper::body::Incoming;
+    use hyper::service::service_fn;
+    use hyper::Request;
+    use hyper::Response as HyperResponse;
+    use hyper_util::rt::TokioIo;
+    use http_body_util::Full;
+    use bytes::Bytes;
 
     /// Unit struct — used as `HttpServer.listen(":3000")` in U source
     pub struct HttpServer;
@@ -388,69 +396,85 @@ pub mod http {
         listener: TcpListener,
     }
 
+    /// Zero-allocation bridge between hyper service and imperative U code.
+    /// Uses Notify (permit-based) instead of channels — no heap alloc per request.
+    struct Bridge {
+        path: StdMutex<Option<String>>,
+        response: StdMutex<Option<HttpResponse>>,
+        req_ready: Notify,
+        resp_ready: Notify,
+        done: AtomicBool,
+    }
+
     impl HttpListener {
         pub async fn accept(&self) -> Result<HttpConn, Box<dyn Error + Send + Sync>> {
             let (stream, _) = self.listener.accept().await?;
             stream.set_nodelay(true).ok();
-            Ok(HttpConn {
-                stream: Arc::new(Mutex::new(stream)),
-                keep_alive: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            })
-        }
-    }
 
-    fn parse_path(request: &str) -> String {
-        if let Some(line) = request.lines().next() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                return parts[1].to_string();
-            }
+            let bridge = Arc::new(Bridge {
+                path: StdMutex::new(None),
+                response: StdMutex::new(None),
+                req_ready: Notify::new(),
+                resp_ready: Notify::new(),
+                done: AtomicBool::new(false),
+            });
+
+            let b_svc = bridge.clone();
+            let b_done = bridge.clone();
+            let io = TokioIo::new(stream);
+            tokio::spawn(async move {
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .keep_alive(true)
+                    .pipeline_flush(true)
+                    .serve_connection(io, service_fn(move |req: Request<Incoming>| {
+                        let b = b_svc.clone();
+                        async move {
+                            let path = req.uri().path().to_string();
+                            *b.path.lock().unwrap() = Some(path);
+                            b.req_ready.notify_one();
+                            b.resp_ready.notified().await;
+                            let resp = b.response.lock().unwrap().take().unwrap_or_else(|| {
+                                HttpResponse {
+                                    status_code: 500,
+                                    status_text: "Error".into(),
+                                    content_type: "text/plain".into(),
+                                    body: "Server Error".into(),
+                                }
+                            });
+                            Ok::<_, hyper::Error>(HyperResponse::builder()
+                                .status(resp.status_code)
+                                .header("content-type", resp.content_type)
+                                .body(Full::new(Bytes::from(resp.body)))
+                                .unwrap())
+                        }
+                    }))
+                    .await;
+                b_done.done.store(true, Ordering::Release);
+                b_done.req_ready.notify_one();
+            });
+
+            Ok(HttpConn { bridge })
         }
-        String::new()
     }
 
     #[derive(Clone)]
     pub struct HttpConn {
-        stream: Arc<Mutex<TcpStream>>,
-        keep_alive: Arc<std::sync::atomic::AtomicBool>,
+        bridge: Arc<Bridge>,
     }
 
     impl HttpConn {
-        /// Read next HTTP request from connection. Returns path, or "" on EOF/closed.
+        /// Read next HTTP request path. Returns "" on connection close.
         pub async fn path(&self) -> String {
-            // If previous request was not keep-alive, stop reading
-            if !self.keep_alive.load(std::sync::atomic::Ordering::Relaxed) {
+            self.bridge.req_ready.notified().await;
+            if self.bridge.done.load(Ordering::Acquire) {
                 return String::new();
             }
-            let mut stream = self.stream.lock().await;
-            let mut buf = [0u8; 4096];
-            match stream.read(&mut buf).await {
-                Ok(0) | Err(_) => String::new(),
-                Ok(n) => {
-                    let request = String::from_utf8_lossy(&buf[..n]);
-                    // Check if client wants keep-alive
-                    let ka = request.to_ascii_lowercase().contains("keep-alive");
-                    self.keep_alive.store(ka, std::sync::atomic::Ordering::Relaxed);
-                    parse_path(&request)
-                }
-            }
+            self.bridge.path.lock().unwrap().take().unwrap_or_default()
         }
 
         pub async fn respond(&self, response: HttpResponse) {
-            let ka = self.keep_alive.load(std::sync::atomic::Ordering::Relaxed);
-            let conn_header = if ka { "keep-alive" } else { "close" };
-            let mut stream = self.stream.lock().await;
-            let resp = format!(
-                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n{}",
-                response.status_code, response.status_text,
-                response.content_type, response.body.len(), conn_header, response.body
-            );
-            let _ = stream.write_all(resp.as_bytes()).await;
-            let _ = stream.flush().await;
-            // If not keep-alive, shut down write side so server sends FIN first
-            if !ka {
-                let _ = stream.shutdown().await;
-            }
+            *self.bridge.response.lock().unwrap() = Some(response);
+            self.bridge.resp_ready.notify_one();
         }
     }
 

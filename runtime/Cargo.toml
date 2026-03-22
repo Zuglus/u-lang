@@ -7,5 +7,9 @@ description = "Runtime library for the U programming language"
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
 # Pin zerocopy to avoid AVX512 issue on nightly
 zerocopy = "=0.8.14"

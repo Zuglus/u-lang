@@ -5,15 +5,15 @@ struct Point
     y: Int
 end
 
-type Shape
+enum Shape
     Circle(radius: Int)
     Rect(width: Int, height: Int)
 end
 
 fn area(shape)
     match shape
-        Circle(r): return r * r * 3
-        Rect(w, h): return w * h
+        Circle(r) => return r * r * 3
+        Rect(w, h) => return w * h
     end
 end
 
