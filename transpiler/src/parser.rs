@@ -16,7 +16,8 @@ fn span(s: pest::Span) -> Span { Span { start: s.start(), end: s.end() } }
 fn is_kw(rule: Rule) -> bool {
     matches!(rule, Rule::fn_kw | Rule::for_kw | Rule::in_kw | Rule::if_kw
         | Rule::elif_kw | Rule::else_kw | Rule::end_kw | Rule::return_kw
-        | Rule::struct_kw | Rule::type_kw | Rule::match_kw)
+        | Rule::struct_kw | Rule::type_kw | Rule::match_kw
+        | Rule::spawn_kw | Rule::loop_kw)
 }
 
 fn meaningful(pairs: pest::iterators::Pairs<Rule>) -> impl Iterator<Item = pest::iterators::Pair<Rule>> + '_ {
@@ -166,6 +167,17 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
             let value = build_expression(p.next().unwrap())?;
             Ok(Stmt::MutAssign { object, field, value, span: s })
         }
+        Rule::spawn_stmt => {
+            let s = span(inner.as_span());
+            let expr = build_expression(meaningful(inner.into_inner()).next().unwrap())?;
+            Ok(Stmt::Spawn { expr, span: s })
+        }
+        Rule::loop_stmt => {
+            let s = span(inner.as_span());
+            let block = meaningful(inner.into_inner()).next().unwrap();
+            let body = build_block(block)?;
+            Ok(Stmt::Loop { body, span: s })
+        }
         _ => unreachable!("unexpected: {:?}", inner.as_rule()),
     }
 }
@@ -250,7 +262,7 @@ fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
             let mut expr = build_expression(inner.next().unwrap())?;
             for part in inner {
                 match part.as_rule() {
-                    Rule::method_call => {
+                    Rule::method_call | Rule::mut_method_call => {
                         let ms = span(part.as_span());
                         let mut mc = part.into_inner();
                         let method = mc.next().unwrap().as_str().to_string();

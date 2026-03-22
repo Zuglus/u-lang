@@ -58,6 +58,8 @@ pub enum Stmt {
     TypeDef { name: String, variants: Vec<Variant>, span: Span },
     Match { expr: Expr, arms: Vec<MatchArm>, span: Span },
     MutAssign { object: Expr, field: String, value: Expr, span: Span },
+    Spawn { expr: Expr, span: Span },
+    Loop { body: Vec<Stmt>, span: Span },
 }
 
 #[derive(Debug)]

@@ -3,15 +3,17 @@
 program = { SOI ~ NEWLINE* ~ (statement ~ (NEWLINE+ | &EOI))* ~ EOI }
 
 // Statements
-statement = { struct_def | type_def | fn_def | for_loop | if_stmt | match_stmt
-            | return_stmt | mutation_stmt | assignment | expr_stmt }
+statement = { struct_def | type_def | fn_def | for_loop | loop_stmt | if_stmt | match_stmt
+            | spawn_stmt | return_stmt | mutation_stmt | assignment | expr_stmt }
 
 struct_def  = { struct_kw ~ identifier ~ NEWLINE+ ~ (typed_field ~ NEWLINE+)* ~ end_kw }
 type_def    = { type_kw ~ identifier ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
 fn_def      = { fn_kw ~ identifier ~ "(" ~ fn_params? ~ ")" ~ fn_ret? ~ NEWLINE+ ~ block ~ end_kw }
 for_loop    = { for_kw ~ for_pattern ~ in_kw ~ expression ~ NEWLINE+ ~ block ~ end_kw }
+loop_stmt   = { loop_kw ~ NEWLINE+ ~ block ~ end_kw }
 if_stmt     = { if_kw ~ expression ~ NEWLINE+ ~ block ~ elif_clause* ~ else_clause? ~ end_kw }
 match_stmt  = { match_kw ~ expression ~ NEWLINE+ ~ (match_arm ~ NEWLINE+)* ~ end_kw }
+spawn_stmt  = { spawn_kw ~ expression }
 return_stmt = { return_kw ~ expression? }
 mutation_stmt = { operand ~ "::" ~ identifier ~ "=" ~ expression }
 assignment  = { identifier ~ "=" ~ expression }
@@ -51,7 +53,8 @@ addition       = { multiplication ~ (add_op ~ multiplication)* }
 multiplication = { unary ~ (mul_op ~ unary)* }
 unary          = { prefix_op* ~ operand }
 operand        = { primary ~ suffix* }
-suffix         = _{ NEWLINE* ~ method_call | NEWLINE* ~ field_access | postfix_op }
+suffix         = _{ NEWLINE* ~ method_call | NEWLINE* ~ field_access
+                  | NEWLINE* ~ mut_method_call | postfix_op }
 primary        = { lambda | struct_init | function_call | string_literal | number | bool_literal
                  | paren_expr | list_literal | identifier }
 
@@ -63,18 +66,19 @@ prefix_op  = { "-" | not_kw }
 not_kw     = @{ "not" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Expression parts
-lambda        = { fn_kw ~ "(" ~ param_list? ~ ")" ~ expression }
-struct_init   = { identifier ~ "(" ~ named_arg_list ~ ")" }
-named_arg_list = { named_arg ~ ("," ~ named_arg)* }
-named_arg     = { identifier ~ ":" ~ expression }
-function_call = { identifier ~ "(" ~ arg_list? ~ ")" }
-method_call   = { "." ~ identifier ~ "(" ~ arg_list? ~ ")" }
-field_access  = { "." ~ identifier }
-postfix_op    = { "?" | bang_op }
-bang_op       = @{ "!" ~ !"=" }
-paren_expr    = { "(" ~ expression ~ ")" }
-list_literal  = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
-arg_list      = { expression ~ ("," ~ expression)* }
+lambda          = { fn_kw ~ "(" ~ param_list? ~ ")" ~ expression }
+struct_init     = { identifier ~ "(" ~ named_arg_list ~ ")" }
+named_arg_list  = { named_arg ~ ("," ~ named_arg)* }
+named_arg       = { identifier ~ ":" ~ expression }
+function_call   = { identifier ~ "(" ~ arg_list? ~ ")" }
+method_call     = { "." ~ identifier ~ "(" ~ arg_list? ~ ")" }
+mut_method_call = { "::" ~ identifier ~ "(" ~ arg_list? ~ ")" }
+field_access    = { "." ~ identifier }
+postfix_op      = { "?" | bang_op }
+bang_op         = @{ "!" ~ !"=" }
+paren_expr      = { "(" ~ expression ~ ")" }
+list_literal    = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
+arg_list        = { expression ~ ("," ~ expression)* }
 
 // String with interpolation
 string_literal = ${ "\"" ~ string_part* ~ "\"" }
@@ -109,6 +113,8 @@ return_kw = @{ "return" ~ !(LETTER | ASCII_DIGIT | "_") }
 struct_kw = @{ "struct" ~ !(LETTER | ASCII_DIGIT | "_") }
 type_kw   = @{ "type" ~ !(LETTER | ASCII_DIGIT | "_") }
 match_kw  = @{ "match" ~ !(LETTER | ASCII_DIGIT | "_") }
+spawn_kw  = @{ "spawn" ~ !(LETTER | ASCII_DIGIT | "_") }
+loop_kw   = @{ "loop" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Implicit rules
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }

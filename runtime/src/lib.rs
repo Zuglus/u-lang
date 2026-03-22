@@ -8,6 +8,7 @@ use std::error::Error;
 // Re-export everything at crate root for `use u_runtime::*;`
 pub use db::{Db, Row, Sqlite};
 pub use args::{Args, ParsedArgs};
+pub use concurrency::{Channel, Chan};
 
 /// Extension trait: .int() on strings
 pub trait StrExt {
@@ -183,6 +184,44 @@ pub mod args {
     }
 }
 
+// ─── Concurrency ─────────────────────────────────────────
+
+pub mod concurrency {
+    use std::sync::{mpsc, Arc, Mutex};
+
+    /// Unit struct — used as `Channel.new()` in U source
+    pub struct Channel;
+
+    impl Channel {
+        pub fn new(&self) -> Chan {
+            let (tx, rx) = mpsc::channel();
+            Chan { tx, rx: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    /// The actual channel value, cloneable across threads
+    #[derive(Clone)]
+    pub struct Chan {
+        tx: mpsc::Sender<String>,
+        rx: Arc<Mutex<mpsc::Receiver<String>>>,
+    }
+
+    impl Chan {
+        pub fn send(&self, msg: &str) {
+            let _ = self.tx.send(msg.to_string());
+        }
+
+        pub fn recv(&self) -> String {
+            self.rx.lock().unwrap().recv().unwrap_or_default()
+        }
+    }
+}
+
+/// Sleep for given milliseconds
+pub fn sleep(ms: i64) {
+    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +253,15 @@ mod tests {
         db.exec1("INSERT INTO t (v) VALUES ($1)", &42_i64).unwrap();
         let rows = db.query("SELECT v FROM t").unwrap();
         assert_eq!(rows[0].int("v"), 42);
+    }
+
+    #[test]
+    fn test_channel() {
+        let ch = Channel.new();
+        let ch2 = ch.clone();
+        std::thread::spawn(move || { ch2.send("hello"); });
+        let msg = ch.recv();
+        assert_eq!(msg, "hello");
     }
 
     #[test]

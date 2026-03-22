@@ -27,19 +27,48 @@ impl Ctx {
 }
 
 fn map_type(t: &str) -> &str {
-    match t { "Int" => "i64", "Float" => "f64", "String" => "String", "Bool" => "bool", o => o }
+    match t { "Int" => "i64", "Float" => "f64", "String" => "String", "Bool" => "bool", "Channel" => "Chan", o => o }
 }
 
 fn map_param_type(t: &str) -> String {
     match t {
         "Int" => "i64".into(), "Float" => "f64".into(), "Bool" => "bool".into(),
         "String" => "&str".into(), "Db" => "&Db".into(),
+        "Channel" => "Chan".into(),
         other => format!("&{}", other),
     }
 }
 
 fn is_ref_type(t: &str) -> bool {
-    !matches!(t, "Int" | "Float" | "Bool")
+    !matches!(t, "Int" | "Float" | "Bool" | "Channel")
+}
+
+fn collect_free_vars(expr: &Expr) -> Vec<String> {
+    let mut vars = Vec::new();
+    match expr {
+        Expr::Identifier { name, .. } => vars.push(name.clone()),
+        Expr::FunctionCall { args, .. } => {
+            for a in args { vars.extend(collect_free_vars(a)); }
+        }
+        Expr::MethodCall { object, args, .. } => {
+            vars.extend(collect_free_vars(object));
+            for a in args { vars.extend(collect_free_vars(a)); }
+        }
+        Expr::Lambda { body, params, .. } => {
+            let inner = collect_free_vars(body);
+            for v in inner { if !params.contains(&v) { vars.push(v); } }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            vars.extend(collect_free_vars(left));
+            vars.extend(collect_free_vars(right));
+        }
+        Expr::UnaryOp { expr, .. } | Expr::PostfixOp { expr, .. } => {
+            vars.extend(collect_free_vars(expr));
+        }
+        Expr::FieldAccess { object, .. } => vars.extend(collect_free_vars(object)),
+        _ => {}
+    }
+    vars
 }
 
 // Check if any expression in stmts uses postfix ?
@@ -254,6 +283,28 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         Stmt::MutAssign { object, field, value, .. } => {
             gen_expr(object, out, ctx); out.push('.'); out.push_str(field); out.push_str(" = ");
             gen_expr(value, out, ctx); out.push_str(";\n");
+        }
+        Stmt::Loop { body, .. } => {
+            out.push_str("loop {\n");
+            gen_stmts(body, out, indent + 1, ctx, result_fn);
+            out.push_str(&pad); out.push_str("}\n");
+        }
+        Stmt::Spawn { expr, .. } => {
+            // Clone captured variables so move closure works
+            let mut vars = collect_free_vars(expr);
+            vars.sort(); vars.dedup();
+            vars.retain(|v| !ctx.fn_params.contains_key(v));
+            out.push_str("{\n");
+            for v in &vars {
+                out.push_str(&pad); out.push_str("    let ");
+                out.push_str(v); out.push_str(" = "); out.push_str(v); out.push_str(".clone();\n");
+            }
+            out.push_str(&pad); out.push_str("    std::thread::spawn(move || {\n");
+            out.push_str(&pad); out.push_str("        ");
+            gen_expr(expr, out, ctx);
+            out.push_str(";\n");
+            out.push_str(&pad); out.push_str("    });\n");
+            out.push_str(&pad); out.push_str("}\n");
         }
     }
 }

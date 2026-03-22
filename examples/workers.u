@@ -1,0 +1,23 @@
+// workers.u — горутины и каналы
+
+fn worker(id: Int, ch: Channel)
+    loop
+        msg = ch.recv()
+        if msg == "stop"
+            print("Worker $id: stopped")
+            return
+        end
+        print("Worker $id: $msg")
+    end
+end
+
+ch = Channel.new()
+spawn worker(1, ch)
+spawn worker(2, ch)
+ch::send("task A")
+ch::send("task B")
+ch::send("task C")
+ch::send("stop")
+ch::send("stop")
+sleep(100)
+print("Done")
