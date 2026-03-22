@@ -128,8 +128,10 @@ fn infer_param_type(param: &str, body: &[Stmt], ctx: &Ctx) -> String {
     "i64".to_string()
 }
 
-pub fn generate(program: &Program) -> String {
+pub fn generate(program: &Program) -> Result<String, String> {
     let ctx = Ctx::from_program(program);
+    validate_spawn_safety(program, &ctx)?;
+
     let mut out = String::new();
     out.push_str("#![allow(unused_mut, unused_variables, dead_code, unused_imports)]\n");
     out.push_str("use u_runtime::*;\n\n");
@@ -146,6 +148,11 @@ pub fn generate(program: &Program) -> String {
     }
 
     out.push_str("fn main() {\n");
+    out.push_str("    std::panic::set_hook(Box::new(|info| {\n");
+    out.push_str("        if std::thread::current().name() == Some(\"main\") {\n");
+    out.push_str("            eprintln!(\"{}\", info);\n");
+    out.push_str("        }\n");
+    out.push_str("    }));\n");
     out.push_str("    if let Err(e) = _u_main() { eprintln!(\"Ошибка: {}\", e); std::process::exit(1); }\n");
     out.push_str("}\n\n");
     out.push_str("fn _u_main() -> Result<(), Box<dyn std::error::Error>> {\n");
@@ -156,7 +163,44 @@ pub fn generate(program: &Program) -> String {
         }
     }
     out.push_str("    Ok(())\n}\n");
-    out
+    Ok(out)
+}
+
+fn validate_spawn_safety(program: &Program, ctx: &Ctx) -> Result<(), String> {
+    for stmt in &program.statements {
+        validate_stmt_spawn(stmt, ctx)?;
+    }
+    Ok(())
+}
+
+fn validate_stmt_spawn(stmt: &Stmt, ctx: &Ctx) -> Result<(), String> {
+    match stmt {
+        Stmt::Spawn { expr, .. } => {
+            if let Expr::FunctionCall { name, .. } = expr {
+                if let Some(params) = ctx.fn_params.get(name.as_str()) {
+                    if let Some(p) = params.iter().find(|p| p.is_mut) {
+                        return Err(format!(
+                            "error: cannot mutate external data from goroutine — '::' changes bytes in shared memory. Use a channel (.send) instead.\n  spawn {}(...) ← parameter '::{}' mutates shared data",
+                            name, p.name
+                        ));
+                    }
+                }
+            }
+        }
+        Stmt::FnDef { body, .. } | Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } => {
+            for s in body { validate_stmt_spawn(s, ctx)?; }
+        }
+        Stmt::If { body, elifs, else_body, .. } => {
+            for s in body { validate_stmt_spawn(s, ctx)?; }
+            for (_, b) in elifs { for s in b { validate_stmt_spawn(s, ctx)?; } }
+            if let Some(eb) = else_body { for s in eb { validate_stmt_spawn(s, ctx)?; } }
+        }
+        Stmt::Match { arms, .. } => {
+            for arm in arms { validate_stmt_spawn(&arm.body, ctx)?; }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn gen_stmts(stmts: &[Stmt], out: &mut String, indent: usize, ctx: &Ctx, result_fn: bool, declared: &mut HashSet<String>) {
@@ -317,9 +361,13 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                 out.push_str(v); out.push_str(" = "); out.push_str(v); out.push_str(".clone();\n");
             }
             out.push_str(&pad); out.push_str("    std::thread::spawn(move || {\n");
-            out.push_str(&pad); out.push_str("        ");
+            out.push_str(&pad); out.push_str("        if let Err(e) = catch(|| {\n");
+            out.push_str(&pad); out.push_str("            ");
             gen_expr(expr, out, ctx);
             out.push_str(";\n");
+            out.push_str(&pad); out.push_str("        }) {\n");
+            out.push_str(&pad); out.push_str("            eprintln!(\"goroutine panic: {}\", e);\n");
+            out.push_str(&pad); out.push_str("        }\n");
             out.push_str(&pad); out.push_str("    });\n");
             out.push_str(&pad); out.push_str("}\n");
         }
@@ -478,35 +526,42 @@ mod tests {
 
     #[test]
     fn test_hello() {
-        let code = generate(&parser::parse("name = \"Мир\"\nprint(\"Привет, $name!\")").unwrap());
+        let code = generate(&parser::parse("name = \"Мир\"\nprint(\"Привет, $name!\")").unwrap()).unwrap();
         assert!(code.contains("println!(\"Привет, {}!\", name)"));
     }
 
     #[test]
     fn test_fn_result() {
-        let code = generate(&parser::parse("fn f(): Db\n    x = Sqlite.open(\"a\")?\n    return x\nend").unwrap());
+        let code = generate(&parser::parse("fn f(): Db\n    x = Sqlite.open(\"a\")?\n    return x\nend").unwrap()).unwrap();
         assert!(code.contains("-> Result<Db, Box<dyn std::error::Error>>"));
         assert!(code.contains("return Ok(x)"));
     }
 
     #[test]
     fn test_fn_ref_params() {
-        let code = generate(&parser::parse("fn f(db: Db, t: String)\n    print(t)\nend\nf(db, title)").unwrap());
+        let code = generate(&parser::parse("fn f(db: Db, t: String)\n    print(t)\nend\nf(db, title)").unwrap()).unwrap();
         assert!(code.contains("fn f(db: &Db, t: &str)"));
         assert!(code.contains("f(&db, &title)"));
     }
 
     #[test]
     fn test_exec1() {
-        let code = generate(&parser::parse("x = db.exec(\"sql\", val)").unwrap());
+        let code = generate(&parser::parse("x = db.exec(\"sql\", val)").unwrap()).unwrap();
         assert!(code.contains("db.exec1(\"sql\", &val)"));
     }
 
     #[test]
     fn test_match_string() {
-        let code = generate(&parser::parse("match cmd\n    \"a\": print(\"ok\")\n    _: print(\"no\")\nend").unwrap());
+        let code = generate(&parser::parse("match cmd\n    \"a\": print(\"ok\")\n    _: print(\"no\")\nend").unwrap()).unwrap();
         assert!(code.contains("match cmd.as_str()"));
         assert!(code.contains("\"a\" =>"));
         assert!(code.contains("_ =>"));
+    }
+
+    #[test]
+    fn test_spawn_mut_param_rejected() {
+        let result = generate(&parser::parse("fn writer(::data)\n    print(data)\nend\nspawn writer(x)").unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot mutate external data"));
     }
 }

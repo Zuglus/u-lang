@@ -32,6 +32,7 @@ pub enum MatchPattern {
 pub struct FnParam {
     pub name: String,
     pub type_ann: Option<String>,
+    pub is_mut: bool,
 }
 
 #[derive(Debug)]

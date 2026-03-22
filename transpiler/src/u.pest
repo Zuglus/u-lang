@@ -26,7 +26,8 @@ expr_stmt   = { expression }
 
 // Function params with optional types
 fn_params = { fn_param ~ ("," ~ fn_param)* }
-fn_param  = { identifier ~ (":" ~ identifier)? }
+fn_param   = { mut_marker? ~ identifier ~ (":" ~ identifier)? }
+mut_marker = { "::" }
 fn_ret    = { ":" ~ identifier }
 
 // Struct / type fields

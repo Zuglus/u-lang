@@ -1,0 +1,27 @@
+// spawn_safety.u — компилятор запрещает :: в spawn
+//
+// ОШИБКА КОМПИЛЯЦИИ:
+// fn writer(::data)
+//     data::push(42)
+// end
+// spawn writer(items)   // ← error: cannot mutate external data from goroutine
+//
+// ПРАВИЛЬНО — через канал:
+
+fn processor(ch: Channel)
+    loop
+        msg = ch.recv()
+        if msg == "stop"
+            print("Processor done")
+            return
+        end
+        print("Processing: $msg")
+    end
+end
+
+ch = Channel.new()
+spawn processor(ch)
+ch.send("task 1")
+ch.send("task 2")
+ch.send("stop")
+sleep(500)

@@ -1,26 +1,19 @@
-// fault_tolerance.u — один воркер паникует, остальные продолжают
+// fault_tolerance.u — spawn автоматически ловит паники
 
 fn risky_worker(id: Int, ch: Channel)
     msg = ch.recv()
     if msg == "crash"
-        error("Worker $id crashed!")
+        msg.int()!    // "crash" не число → ! → паника
     end
     print("Worker $id: processed $msg")
 end
 
-fn safe_spawn(id: Int, ch: Channel)
-    match catch(fn() risky_worker(id, ch))
-        Ok(_): print("Worker $id: done")
-        Err(e): print("Worker $id: caught crash - $e")
-    end
-end
-
 ch = Channel.new()
-spawn safe_spawn(1, ch)
-spawn safe_spawn(2, ch)
-spawn safe_spawn(3, ch)
-ch::send("task A")
-ch::send("crash")
-ch::send("task B")
+spawn risky_worker(1, ch)
+spawn risky_worker(2, ch)
+spawn risky_worker(3, ch)
+ch.send("task A")
+ch.send("crash")
+ch.send("task B")
 sleep(500)
-print("Server still running")
+print("All workers done, server still running")

@@ -75,9 +75,17 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                     Rule::fn_params => {
                         for fp in p.into_inner() {
                             let mut fi = fp.into_inner();
-                            let pname = fi.next().unwrap().as_str().to_string();
+                            let mut is_mut = false;
+                            let first = fi.next().unwrap();
+                            let pname;
+                            if first.as_rule() == Rule::mut_marker {
+                                is_mut = true;
+                                pname = fi.next().unwrap().as_str().to_string();
+                            } else {
+                                pname = first.as_str().to_string();
+                            }
                             let ptype = fi.next().map(|t| t.as_str().to_string());
-                            params.push(FnParam { name: pname, type_ann: ptype });
+                            params.push(FnParam { name: pname, type_ann: ptype, is_mut });
                         }
                     }
                     Rule::fn_ret => {

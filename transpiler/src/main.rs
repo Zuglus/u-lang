@@ -56,7 +56,8 @@ fn parse_file(path: &PathBuf) -> anyhow::Result<u::ast::Program> {
 
 fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     let ast = parse_file(path)?;
-    let rust_code = u::generator::generate(&ast);
+    let rust_code = u::generator::generate(&ast)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let stem = path
         .file_stem()

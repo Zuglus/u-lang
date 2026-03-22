@@ -21,8 +21,8 @@ end
 
 ch = Channel.new()
 spawn counter_worker(ch)
-ch::send("inc")
-ch::send("inc")
-ch::send("inc")
-ch::send("stop")
+ch.send("inc")
+ch.send("inc")
+ch.send("inc")
+ch.send("stop")
 sleep(500)
