@@ -3,8 +3,13 @@
 program = { SOI ~ NEWLINE* ~ (statement ~ (NEWLINE+ | &EOI))* ~ EOI }
 
 // Statements
-statement = { struct_def | type_def | fn_def | for_loop | loop_stmt | if_stmt | match_stmt
+statement = { memory_stmt | use_stmt | struct_def | type_def | fn_def | for_loop | loop_stmt | if_stmt | match_stmt
             | spawn_stmt | return_stmt | mutation_stmt | assignment | expr_stmt }
+
+memory_stmt = { memory_kw ~ "(" ~ identifier ~ ")" }
+use_stmt    = { use_kw ~ use_path ~ ":" ~ use_items }
+use_path    = @{ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_" | ".")* }
+use_items   = { identifier ~ ("," ~ identifier)* }
 
 struct_def  = { struct_kw ~ identifier ~ NEWLINE+ ~ (typed_field ~ NEWLINE+)* ~ end_kw }
 type_def    = { type_kw ~ identifier ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
@@ -115,6 +120,8 @@ type_kw   = @{ "type" ~ !(LETTER | ASCII_DIGIT | "_") }
 match_kw  = @{ "match" ~ !(LETTER | ASCII_DIGIT | "_") }
 spawn_kw  = @{ "spawn" ~ !(LETTER | ASCII_DIGIT | "_") }
 loop_kw   = @{ "loop" ~ !(LETTER | ASCII_DIGIT | "_") }
+memory_kw = @{ "memory" ~ !(LETTER | ASCII_DIGIT | "_") }
+use_kw    = @{ "use" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Implicit rules
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }

@@ -1,0 +1,28 @@
+// race_check.u — безопасность мутаций в горутинах
+//
+// ПЛОХО — мутация разделяемых данных (пока компилятор не ловит):
+// counter = 0
+// spawn fn() counter = counter + 1    // гонка данных!
+//
+// ХОРОШО — через канал:
+
+fn counter_worker(ch: Channel)
+    count = 0
+    loop
+        msg = ch.recv()
+        if msg == "stop"
+            print("Total: $count")
+            return
+        end
+        count = count + 1
+        print("Count: $count")
+    end
+end
+
+ch = Channel.new()
+spawn counter_worker(ch)
+ch::send("inc")
+ch::send("inc")
+ch::send("inc")
+ch::send("stop")
+sleep(500)

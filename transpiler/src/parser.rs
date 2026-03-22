@@ -17,7 +17,7 @@ fn is_kw(rule: Rule) -> bool {
     matches!(rule, Rule::fn_kw | Rule::for_kw | Rule::in_kw | Rule::if_kw
         | Rule::elif_kw | Rule::else_kw | Rule::end_kw | Rule::return_kw
         | Rule::struct_kw | Rule::type_kw | Rule::match_kw
-        | Rule::spawn_kw | Rule::loop_kw)
+        | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw)
 }
 
 fn meaningful(pairs: pest::iterators::Pairs<Rule>) -> impl Iterator<Item = pest::iterators::Pair<Rule>> + '_ {
@@ -177,6 +177,20 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
             let block = meaningful(inner.into_inner()).next().unwrap();
             let body = build_block(block)?;
             Ok(Stmt::Loop { body, span: s })
+        }
+        Rule::memory_stmt => {
+            let s = span(inner.as_span());
+            let mode = meaningful(inner.into_inner()).next().unwrap().as_str().to_string();
+            Ok(Stmt::MemoryDecl { mode, span: s })
+        }
+        Rule::use_stmt => {
+            let s = span(inner.as_span());
+            let mut p = meaningful(inner.into_inner());
+            let path = p.next().unwrap().as_str().to_string();
+            let imports = p.next().unwrap().into_inner()
+                .map(|i| i.as_str().to_string())
+                .collect();
+            Ok(Stmt::UseDecl { path, imports, span: s })
         }
         _ => unreachable!("unexpected: {:?}", inner.as_rule()),
     }

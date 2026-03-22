@@ -137,7 +137,8 @@ pub fn generate(program: &Program) -> String {
     for stmt in &program.statements {
         match stmt {
             Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. } => {
-                gen_stmt(stmt, &mut out, 0, &ctx, false);
+                let mut decl = HashSet::new();
+                gen_stmt(stmt, &mut out, 0, &ctx, false, &mut decl);
                 out.push('\n');
             }
             _ => {}
@@ -148,20 +149,28 @@ pub fn generate(program: &Program) -> String {
     out.push_str("    if let Err(e) = _u_main() { eprintln!(\"Ошибка: {}\", e); std::process::exit(1); }\n");
     out.push_str("}\n\n");
     out.push_str("fn _u_main() -> Result<(), Box<dyn std::error::Error>> {\n");
+    let mut main_declared = HashSet::new();
     for stmt in &program.statements {
-        if !matches!(stmt, Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. }) {
-            gen_stmt(stmt, &mut out, 1, &ctx, true);
+        if !matches!(stmt, Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. } | Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. }) {
+            gen_stmt(stmt, &mut out, 1, &ctx, true, &mut main_declared);
         }
     }
     out.push_str("    Ok(())\n}\n");
     out
 }
 
-fn gen_stmts(stmts: &[Stmt], out: &mut String, indent: usize, ctx: &Ctx, result_fn: bool) {
-    for stmt in stmts { gen_stmt(stmt, out, indent, ctx, result_fn); }
+fn gen_stmts(stmts: &[Stmt], out: &mut String, indent: usize, ctx: &Ctx, result_fn: bool, declared: &mut HashSet<String>) {
+    for stmt in stmts { gen_stmt(stmt, out, indent, ctx, result_fn, declared); }
 }
 
-fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: bool) {
+fn is_plain_string(expr: &Expr) -> bool {
+    matches!(expr, Expr::StringLiteral { parts, .. } if !parts.iter().any(|p| matches!(p, StringPart::Interpolation(_))))
+}
+
+fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: bool, declared: &mut HashSet<String>) {
+    if matches!(stmt, Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. }) {
+        return;
+    }
     let pad = "    ".repeat(indent);
     out.push_str(&pad);
     match stmt {
@@ -189,8 +198,15 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::Assignment { name, value, .. } => {
-            out.push_str("let mut "); out.push_str(name); out.push_str(" = ");
-            gen_expr(value, out, ctx); out.push_str(";\n");
+            if declared.contains(name.as_str()) {
+                out.push_str(name); out.push_str(" = ");
+            } else {
+                declared.insert(name.clone());
+                out.push_str("let mut "); out.push_str(name); out.push_str(" = ");
+            }
+            gen_expr(value, out, ctx);
+            if is_plain_string(value) { out.push_str(".to_string()"); }
+            out.push_str(";\n");
         }
         Stmt::ExprStmt { expr, .. } => {
             gen_expr(expr, out, ctx); out.push_str(";\n");
@@ -217,7 +233,8 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                 out.push_str(" -> "); out.push_str(ret);
             }
             out.push_str(" {\n");
-            gen_stmts(body, out, indent + 1, ctx, fn_uses_q);
+            let mut fn_declared = HashSet::new();
+            gen_stmts(body, out, indent + 1, ctx, fn_uses_q, &mut fn_declared);
             if fn_uses_q && !has_ret { out.push_str(&pad); out.push_str("    Ok(())\n"); }
             out.push_str(&pad); out.push_str("}\n");
         }
@@ -228,20 +245,20 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                 ForPattern::Tuple(ns) => { out.push('('); out.push_str(&ns.join(", ")); out.push(')'); }
             }
             out.push_str(" in "); gen_expr(iter, out, ctx); out.push_str(" {\n");
-            gen_stmts(body, out, indent + 1, ctx, result_fn);
+            gen_stmts(body, out, indent + 1, ctx, result_fn, declared);
             out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::If { condition, body, elifs, else_body, .. } => {
             out.push_str("if "); gen_expr(condition, out, ctx); out.push_str(" {\n");
-            gen_stmts(body, out, indent + 1, ctx, result_fn);
+            gen_stmts(body, out, indent + 1, ctx, result_fn, declared);
             out.push_str(&pad); out.push('}');
             for (cond, block) in elifs {
                 out.push_str(" else if "); gen_expr(cond, out, ctx); out.push_str(" {\n");
-                gen_stmts(block, out, indent + 1, ctx, result_fn);
+                gen_stmts(block, out, indent + 1, ctx, result_fn, declared);
                 out.push_str(&pad); out.push('}');
             }
             if let Some(eb) = else_body {
-                out.push_str(" else {\n"); gen_stmts(eb, out, indent + 1, ctx, result_fn);
+                out.push_str(" else {\n"); gen_stmts(eb, out, indent + 1, ctx, result_fn, declared);
                 out.push_str(&pad); out.push('}');
             }
             out.push('\n');
@@ -262,7 +279,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                     MatchPattern::Wildcard => { out.push('_'); }
                 }
                 out.push_str(" => {\n");
-                gen_stmt(&arm.body, out, indent + 2, ctx, result_fn);
+                gen_stmt(&arm.body, out, indent + 2, ctx, result_fn, declared);
                 out.push_str(&pad); out.push_str("    }\n");
             }
             out.push_str(&pad); out.push_str("}\n");
@@ -286,7 +303,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         }
         Stmt::Loop { body, .. } => {
             out.push_str("loop {\n");
-            gen_stmts(body, out, indent + 1, ctx, result_fn);
+            gen_stmts(body, out, indent + 1, ctx, result_fn, declared);
             out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::Spawn { expr, .. } => {
@@ -306,6 +323,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             out.push_str(&pad); out.push_str("    });\n");
             out.push_str(&pad); out.push_str("}\n");
         }
+        Stmt::MemoryDecl { .. } | Stmt::UseDecl { .. } => { /* unreachable — filtered above */ }
     }
 }
 

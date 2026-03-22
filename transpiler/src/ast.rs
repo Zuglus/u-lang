@@ -60,6 +60,8 @@ pub enum Stmt {
     MutAssign { object: Expr, field: String, value: Expr, span: Span },
     Spawn { expr: Expr, span: Span },
     Loop { body: Vec<Stmt>, span: Span },
+    MemoryDecl { mode: String, span: Span },
+    UseDecl { path: String, imports: Vec<String>, span: Span },
 }
 
 #[derive(Debug)]

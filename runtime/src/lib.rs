@@ -9,6 +9,7 @@ use std::error::Error;
 pub use db::{Db, Row, Sqlite};
 pub use args::{Args, ParsedArgs};
 pub use concurrency::{Channel, Chan};
+pub use http::{HttpServer, HttpListener, HttpConn, Response, HttpResponse};
 
 /// Extension trait: .int() on strings
 pub trait StrExt {
@@ -220,6 +221,151 @@ pub mod concurrency {
 /// Sleep for given milliseconds
 pub fn sleep(ms: i64) {
     std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+}
+
+/// Read file contents as String
+pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<String, Box<dyn Error>> {
+    Ok(std::fs::read_to_string(path)?)
+}
+
+/// Determine MIME type from file extension
+pub fn mime_type(path: impl AsRef<str>) -> String {
+    let path = path.as_ref();
+    if path.ends_with(".html") || path.ends_with(".htm") { "text/html".into() }
+    else if path.ends_with(".css") { "text/css".into() }
+    else if path.ends_with(".js") { "application/javascript".into() }
+    else if path.ends_with(".json") { "application/json".into() }
+    else if path.ends_with(".png") { "image/png".into() }
+    else if path.ends_with(".jpg") || path.ends_with(".jpeg") { "image/jpeg".into() }
+    else if path.ends_with(".svg") { "image/svg+xml".into() }
+    else if path.ends_with(".ico") { "image/x-icon".into() }
+    else if path.ends_with(".txt") { "text/plain".into() }
+    else { "application/octet-stream".into() }
+}
+
+/// Catch panics — wraps std::panic::catch_unwind
+pub fn catch<F: FnOnce()>(f: F) -> Result<(), String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            Err(msg)
+        }
+    }
+}
+
+/// Trigger a panic (catchable by catch())
+pub fn error(msg: impl AsRef<str>) {
+    panic!("{}", msg.as_ref());
+}
+
+// ─── HTTP ────────────────────────────────────────────────
+
+pub mod http {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
+    use std::error::Error;
+
+    /// Unit struct — used as `HttpServer.listen(":3000")` in U source
+    pub struct HttpServer;
+
+    impl HttpServer {
+        pub fn listen(&self, addr: &str) -> Result<HttpListener, Box<dyn Error>> {
+            let bind_addr = if addr.starts_with(':') {
+                format!("0.0.0.0{}", addr)
+            } else {
+                addr.to_string()
+            };
+            let listener = TcpListener::bind(&bind_addr)?;
+            Ok(HttpListener { listener })
+        }
+    }
+
+    pub struct HttpListener {
+        listener: TcpListener,
+    }
+
+    impl HttpListener {
+        pub fn accept(&self) -> Result<HttpConn, Box<dyn Error>> {
+            let (mut stream, _) = self.listener.accept()?;
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf)?;
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let path = parse_path(&request);
+            Ok(HttpConn { stream: Arc::new(Mutex::new(stream)), request_path: path })
+        }
+    }
+
+    fn parse_path(request: &str) -> String {
+        if let Some(line) = request.lines().next() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                return parts[1].to_string();
+            }
+        }
+        "/".to_string()
+    }
+
+    #[derive(Clone)]
+    pub struct HttpConn {
+        stream: Arc<Mutex<TcpStream>>,
+        request_path: String,
+    }
+
+    impl HttpConn {
+        pub fn path(&self) -> String {
+            self.request_path.clone()
+        }
+
+        pub fn respond(&self, response: HttpResponse) {
+            if let Ok(mut stream) = self.stream.lock() {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.status_code, response.status_text,
+                    response.content_type, response.body.len(), response.body
+                );
+                let _ = stream.flush();
+            }
+        }
+    }
+
+    /// Unit struct — used as `Response.ok(...)` in U source
+    pub struct Response;
+
+    impl Response {
+        pub fn ok(&self, body: impl Into<String>, content_type: impl Into<String>) -> HttpResponse {
+            HttpResponse {
+                status_code: 200,
+                status_text: "OK".into(),
+                content_type: content_type.into(),
+                body: body.into(),
+            }
+        }
+
+        pub fn not_found(&self, body: impl Into<String>) -> HttpResponse {
+            HttpResponse {
+                status_code: 404,
+                status_text: "Not Found".into(),
+                content_type: "text/plain".into(),
+                body: body.into(),
+            }
+        }
+    }
+
+    pub struct HttpResponse {
+        pub status_code: u16,
+        pub status_text: String,
+        pub content_type: String,
+        pub body: String,
+    }
 }
 
 #[cfg(test)]
