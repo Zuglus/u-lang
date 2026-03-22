@@ -16,14 +16,13 @@ pub trait StrExt {
 
 impl StrExt for String {
     fn int(&self) -> Result<i64, Box<dyn Error>> {
-        self.as_str().int()
+        Ok(self.parse::<i64>()?)
     }
 }
 
 impl StrExt for str {
     fn int(&self) -> Result<i64, Box<dyn Error>> {
-        self.parse::<i64>()
-            .map_err(|_| format!("\"{}\" — не целое число", self).into())
+        Ok(self.parse::<i64>()?)
     }
 }
 
