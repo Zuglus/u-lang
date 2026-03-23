@@ -1,25 +1,33 @@
 use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
 use crate::ast::*;
 
 struct Ctx {
     structs: HashSet<String>,
+    struct_fields: HashMap<String, Vec<String>>,
     variant_to_enum: HashMap<String, String>,
     fn_params: HashMap<String, Vec<FnParam>>,
     async_fns: HashSet<String>,
     line_starts: Vec<usize>,
     filename: String,
+    struct_vars: RefCell<HashSet<String>>,
 }
 
 impl Ctx {
     fn new(program: &Program, source: &str, filename: &str) -> Self {
         let mut ctx = Ctx {
-            structs: HashSet::new(), variant_to_enum: HashMap::new(),
+            structs: HashSet::new(), struct_fields: HashMap::new(),
+            variant_to_enum: HashMap::new(),
             fn_params: HashMap::new(), async_fns: HashSet::new(),
             line_starts: compute_line_starts(source), filename: filename.to_string(),
+            struct_vars: RefCell::new(HashSet::new()),
         };
         for stmt in &program.statements {
             match stmt {
-                Stmt::StructDef { name, .. } => { ctx.structs.insert(name.clone()); }
+                Stmt::StructDef { name, fields, .. } => {
+                    ctx.structs.insert(name.clone());
+                    ctx.struct_fields.insert(name.clone(), fields.iter().map(|f| f.name.clone()).collect());
+                }
                 Stmt::TypeDef { name, variants, .. } => {
                     for v in variants { ctx.variant_to_enum.insert(v.name.clone(), name.clone()); }
                 }
@@ -30,6 +38,17 @@ impl Ctx {
             }
         }
         ctx.async_fns = compute_async_fns(program);
+        // Pre-populate struct_vars from top-level assignments
+        for stmt in &program.statements {
+            match stmt {
+                Stmt::Assignment { name, value, .. } => {
+                    if is_struct_creating_expr(value, &ctx) {
+                        ctx.struct_vars.borrow_mut().insert(name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
         ctx
     }
 
@@ -131,21 +150,113 @@ fn expr_calls_async(e: &Expr, af: &HashSet<String>) -> bool {
     }
 }
 
+fn is_struct_creating_expr(expr: &Expr, ctx: &Ctx) -> bool {
+    match expr {
+        Expr::StructInit { name, .. } => ctx.structs.contains(name),
+        // Static method call on struct type: Counter.new() → likely returns struct
+        Expr::MethodCall { object, .. } => {
+            if let Expr::Identifier { name, .. } = object.as_ref() {
+                ctx.structs.contains(name.as_str())
+            } else { false }
+        }
+        _ => false,
+    }
+}
+
+fn is_struct_var_ident(expr: &Expr, ctx: &Ctx) -> bool {
+    if let Expr::Identifier { name, .. } = expr {
+        ctx.struct_vars.borrow().contains(name.as_str())
+    } else { false }
+}
+
+// Find field access on a parameter in expressions (for type inference)
+fn expr_accesses_field_on(param: &str, expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::FieldAccess { object, field, .. } => {
+            if let Expr::Identifier { name, .. } = object.as_ref() {
+                if name == param { return Some(field.clone()); }
+            }
+            expr_accesses_field_on(param, object)
+        }
+        Expr::MethodCall { object, args, .. } => {
+            expr_accesses_field_on(param, object)
+                .or_else(|| args.iter().find_map(|a| expr_accesses_field_on(param, a)))
+        }
+        Expr::FunctionCall { args, .. } => args.iter().find_map(|a| expr_accesses_field_on(param, a)),
+        Expr::BinaryOp { left, right, .. } => {
+            expr_accesses_field_on(param, left).or_else(|| expr_accesses_field_on(param, right))
+        }
+        Expr::UnaryOp { expr: e, .. } | Expr::PostfixOp { expr: e, .. } => expr_accesses_field_on(param, e),
+        Expr::Lambda { body, .. } => expr_accesses_field_on(param, body),
+        Expr::List { elements, .. } => elements.iter().find_map(|e| expr_accesses_field_on(param, e)),
+        Expr::StructInit { fields, .. } => fields.iter().find_map(|(_, v)| expr_accesses_field_on(param, v)),
+        Expr::StringLiteral { parts, .. } => parts.iter().find_map(|p| match p {
+            StringPart::Interpolation(e) => expr_accesses_field_on(param, e),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+fn stmts_access_field_on(param: &str, stmts: &[Stmt]) -> Option<String> {
+    for stmt in stmts {
+        let result = match stmt {
+            Stmt::ExprStmt { expr, .. } => expr_accesses_field_on(param, expr),
+            Stmt::Assignment { value, .. } => expr_accesses_field_on(param, value),
+            Stmt::Return { value: Some(e), .. } => expr_accesses_field_on(param, e),
+            Stmt::MutAssign { object, value, .. } =>
+                expr_accesses_field_on(param, object).or_else(|| expr_accesses_field_on(param, value)),
+            Stmt::If { condition, body, elifs, else_body, .. } =>
+                expr_accesses_field_on(param, condition)
+                    .or_else(|| stmts_access_field_on(param, body))
+                    .or_else(|| elifs.iter().find_map(|(c, b)|
+                        expr_accesses_field_on(param, c).or_else(|| stmts_access_field_on(param, b))))
+                    .or_else(|| else_body.as_ref().and_then(|b| stmts_access_field_on(param, b))),
+            Stmt::ForLoop { iter, body, .. } =>
+                expr_accesses_field_on(param, iter).or_else(|| stmts_access_field_on(param, body)),
+            Stmt::Loop { body, .. } => stmts_access_field_on(param, body),
+            Stmt::Match { expr, arms, .. } =>
+                expr_accesses_field_on(param, expr)
+                    .or_else(|| arms.iter().find_map(|a| match &a.body {
+                        s => { let ss = vec![s.clone()]; stmts_access_field_on(param, &ss) }
+                    })),
+            _ => None,
+        };
+        if result.is_some() { return result; }
+    }
+    None
+}
+
 fn map_type(t: &str) -> &str {
     match t { "Int" => "i64", "Float" => "f64", "String" => "String", "Bool" => "bool", "Channel" => "Chan", "Response" => "HttpResponse", o => o }
 }
 
-fn map_param_type(t: &str) -> String {
+fn map_param_type(t: &str, structs: &HashSet<String>) -> String {
     match t {
         "Int" => "i64".into(), "Float" => "f64".into(), "Bool" => "bool".into(),
         "String" => "&str".into(), "Db" => "&Db".into(),
         "Channel" => "Chan".into(),
-        other => format!("&{}", other),
+        other => {
+            if structs.contains(other) {
+                format!("Rc<RefCell<{}>>", other)
+            } else {
+                format!("&{}", other)
+            }
+        }
     }
 }
 
 fn is_ref_type(t: &str) -> bool {
     !matches!(t, "Int" | "Float" | "Bool" | "Channel")
+}
+
+fn map_return_type(t: &str, structs: &HashSet<String>) -> String {
+    let mapped = map_type(t);
+    if structs.contains(t) {
+        format!("Rc<RefCell<{}>>", mapped)
+    } else {
+        mapped.to_string()
+    }
 }
 
 fn collect_free_vars(expr: &Expr) -> Vec<String> {
@@ -234,6 +345,14 @@ fn infer_param_type(param: &str, body: &[Stmt], ctx: &Ctx, return_type: Option<&
             }
         }
     }
+    // Struct inference: param.field access → find which struct has that field
+    if let Some(field_name) = stmts_access_field_on(param, body) {
+        for (sname, sfields) in &ctx.struct_fields {
+            if sfields.contains(&field_name) {
+                return format!("Rc<RefCell<{}>>", sname);
+            }
+        }
+    }
     "i64".to_string()
 }
 
@@ -251,13 +370,18 @@ fn stmt_offset(stmt: &Stmt) -> usize {
     }
 }
 
-fn infer_method_ret<'a>(body: &[Stmt], target: &'a str) -> &'a str {
+fn infer_method_ret(body: &[Stmt], target: &str, structs: &HashSet<String>) -> String {
     for stmt in body {
         if let Stmt::Return { value: Some(Expr::StructInit { name, .. }), .. } = stmt {
-            if name == target { return target; }
+            if name == target {
+                if structs.contains(name.as_str()) {
+                    return format!("Rc<RefCell<{}>>", target);
+                }
+                return target.to_string();
+            }
         }
     }
-    "i64"
+    "i64".to_string()
 }
 
 pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[String]) -> Result<String, String> {
@@ -267,6 +391,9 @@ pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[S
     let mut out = String::new();
     out.push_str("#![allow(unused_mut, unused_variables, dead_code, unused_imports)]\n");
     out.push_str("use u_runtime::*;\n");
+    if !ctx.structs.is_empty() {
+        out.push_str("use std::rc::Rc;\nuse std::cell::RefCell;\n");
+    }
 
     // Emit mod declarations for .rs modules
     for m in rs_modules {
@@ -448,6 +575,10 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::Assignment { name, value, .. } => {
+            // Track struct variables
+            if is_struct_creating_expr(value, ctx) {
+                ctx.struct_vars.borrow_mut().insert(name.clone());
+            }
             if declared.contains(name.as_str()) {
                 out.push_str(name); out.push_str(" = ");
             } else {
@@ -464,29 +595,53 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         Stmt::FnDef { name, params, return_type, body, .. } => {
             let fn_uses_q = uses_qmark(body);
             let has_ret = has_return_value(body);
+            // Save struct_vars snapshot for function scope
+            let saved_struct_vars: HashSet<String> = ctx.struct_vars.borrow().clone();
+            // Detect struct params and add to struct_vars
+            let mut struct_params = Vec::new();
+            for p in params.iter() {
+                if p.name == "self" { continue; }
+                let is_struct = if let Some(ref t) = p.type_ann {
+                    ctx.structs.contains(t.as_str())
+                } else {
+                    stmts_access_field_on(&p.name, body).map(|f|
+                        ctx.struct_fields.values().any(|fields| fields.contains(&f))
+                    ).unwrap_or(false)
+                };
+                if is_struct {
+                    ctx.struct_vars.borrow_mut().insert(p.name.clone());
+                    struct_params.push(p.name.clone());
+                }
+            }
             if ctx.async_fns.contains(name) { out.push_str("async "); }
             out.push_str("fn "); out.push_str(name); out.push('(');
             for (i, p) in params.iter().enumerate() {
                 if i > 0 { out.push_str(", "); }
                 out.push_str(&p.name); out.push_str(": ");
                 if let Some(ref t) = p.type_ann {
-                    out.push_str(&map_param_type(t));
+                    out.push_str(&map_param_type(t, &ctx.structs));
                 } else {
                     out.push_str(&infer_param_type(&p.name, body, ctx, return_type.as_deref()));
                 }
             }
             out.push(')');
             if fn_uses_q {
-                let ret = return_type.as_deref().map(map_type).unwrap_or(if has_ret { "i64" } else { "()" });
-                out.push_str(" -> Result<"); out.push_str(ret); out.push_str(", Box<dyn std::error::Error + Send + Sync>>");
+                let ret = return_type.as_deref()
+                    .map(|t| map_return_type(t, &ctx.structs))
+                    .unwrap_or_else(|| (if has_ret { "i64" } else { "()" }).to_string());
+                out.push_str(" -> Result<"); out.push_str(&ret); out.push_str(", Box<dyn std::error::Error + Send + Sync>>");
             } else if has_ret {
-                let ret = return_type.as_deref().map(map_type).unwrap_or("i64");
-                out.push_str(" -> "); out.push_str(ret);
+                let ret = return_type.as_deref()
+                    .map(|t| map_return_type(t, &ctx.structs))
+                    .unwrap_or_else(|| "i64".to_string());
+                out.push_str(" -> "); out.push_str(&ret);
             }
             out.push_str(" {\n");
             let mut fn_declared = HashSet::new();
             gen_stmts(body, out, indent + 1, ctx, fn_uses_q, &mut fn_declared);
             if fn_uses_q && !has_ret { out.push_str(&pad); out.push_str("    Ok(())\n"); }
+            // Restore struct_vars
+            *ctx.struct_vars.borrow_mut() = saved_struct_vars;
             out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::ForLoop { pattern, iter, body, .. } => {
@@ -554,8 +709,14 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             }
         }
         Stmt::MutAssign { object, field, value, .. } => {
-            gen_expr(object, out, ctx); out.push('.'); out.push_str(field); out.push_str(" = ");
-            gen_expr(value, out, ctx); out.push_str(";\n");
+            if is_struct_var_ident(object, ctx) {
+                gen_expr(object, out, ctx); out.push_str(".borrow_mut()."); out.push_str(field); out.push_str(" = ");
+            } else {
+                gen_expr(object, out, ctx); out.push('.'); out.push_str(field); out.push_str(" = ");
+            }
+            gen_expr(value, out, ctx);
+            if is_plain_string(value) { out.push_str(".to_string()"); }
+            out.push_str(";\n");
         }
         Stmt::Loop { body, .. } => {
             out.push_str("loop {\n");
@@ -594,13 +755,14 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                         out.push_str(if p.is_mut { "&mut self" } else { "&self" });
                     } else {
                         out.push_str(&p.name); out.push_str(": ");
-                        if let Some(ref t) = p.type_ann { out.push_str(&map_param_type(t)); }
+                        if let Some(ref t) = p.type_ann { out.push_str(&map_param_type(t, &ctx.structs)); }
                         else { out.push_str("i64"); }
                     }
                 }
                 out.push(')');
                 if let Some(ref ret) = sig.return_type {
-                    out.push_str(" -> "); out.push_str(map_type(ret));
+                    let rt = map_return_type(ret, &ctx.structs);
+                    out.push_str(" -> "); out.push_str(&rt);
                 }
                 out.push_str(";\n");
             }
@@ -629,20 +791,22 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                             out.push_str(if p.is_mut { "&mut self" } else { "&self" });
                         } else {
                             out.push_str(&p.name); out.push_str(": ");
-                            if let Some(ref t) = p.type_ann { out.push_str(&map_param_type(t)); }
+                            if let Some(ref t) = p.type_ann { out.push_str(&map_param_type(t, &ctx.structs)); }
                             else { out.push_str(&infer_param_type(&p.name, body, ctx, return_type.as_deref())); }
                         }
                     }
                     out.push(')');
                     if fn_uses_q {
-                        let ret = return_type.as_deref().map(map_type).unwrap_or(
-                            if has_ret { infer_method_ret(body, target) } else { "()" });
-                        out.push_str(" -> Result<"); out.push_str(ret);
+                        let ret = return_type.as_deref()
+                            .map(|t| map_return_type(t, &ctx.structs))
+                            .unwrap_or_else(|| if has_ret { infer_method_ret(body, target, &ctx.structs) } else { "()".to_string() });
+                        out.push_str(" -> Result<"); out.push_str(&ret);
                         out.push_str(", Box<dyn std::error::Error + Send + Sync>>");
                     } else if has_ret {
-                        let ret = return_type.as_deref().map(map_type)
-                            .unwrap_or_else(|| infer_method_ret(body, target));
-                        out.push_str(" -> "); out.push_str(ret);
+                        let ret = return_type.as_deref()
+                            .map(|t| map_return_type(t, &ctx.structs))
+                            .unwrap_or_else(|| infer_method_ret(body, target, &ctx.structs));
+                        out.push_str(" -> "); out.push_str(&ret);
                     }
                     out.push_str(" {\n");
                     let mut fn_declared = HashSet::new();
@@ -675,9 +839,15 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             if let Some(fn_p) = ctx.fn_params.get(name.as_str()) {
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { out.push_str(", "); }
-                    let needs_ref = fn_p.get(i).and_then(|p| p.type_ann.as_deref()).map(is_ref_type).unwrap_or(false);
-                    if needs_ref { out.push('&'); }
-                    gen_expr(arg, out, ctx);
+                    if is_struct_var_ident(arg, ctx) {
+                        gen_expr(arg, out, ctx);
+                        out.push_str(".clone()");
+                    } else {
+                        let type_ann = fn_p.get(i).and_then(|p| p.type_ann.as_deref());
+                        let needs_ref = type_ann.map(|t| is_ref_type(t) && !ctx.structs.contains(t)).unwrap_or(false);
+                        if needs_ref { out.push('&'); }
+                        gen_expr(arg, out, ctx);
+                    }
                 }
             } else if let Some(param_types) = runtime_param_types(name) {
                 for (i, arg) in args.iter().enumerate() {
@@ -688,7 +858,11 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                     gen_expr(arg, out, ctx);
                 }
             } else {
-                gen_args(args, out, ctx);
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    gen_expr(arg, out, ctx);
+                    if is_struct_var_ident(arg, ctx) { out.push_str(".clone()"); }
+                }
             }
             out.push(')');
             // .await for async functions (user-defined async + runtime async)
@@ -700,7 +874,7 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             out.push('|'); out.push_str(&params.join(", ")); out.push_str("| ");
             gen_expr(body, out, ctx);
         }
-        Expr::MethodCall { object, method, args, .. } => {
+        Expr::MethodCall { object, method, args, is_mut, .. } => {
             // Static method call: StructName.method() → StructName::method()
             if let Expr::Identifier { name, .. } = object.as_ref() {
                 if ctx.structs.contains(name.as_str()) {
@@ -732,6 +906,18 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 out.push(')');
                 return;
             }
+            // Instance method on struct var: borrow/borrow_mut
+            if is_struct_var_ident(object, ctx) {
+                gen_expr(object, out, ctx);
+                if *is_mut {
+                    out.push_str(".borrow_mut().");
+                } else {
+                    out.push_str(".borrow().");
+                }
+                out.push_str(method); out.push('('); gen_args(args, out, ctx); out.push(')');
+                if is_async_method(method) { out.push_str(".await"); }
+                return;
+            }
             gen_expr(object, out, ctx);
             // exec/query with 2+ args → exec1/query1 with &second_arg
             if (method == "exec" || method == "query") && args.len() > 1 {
@@ -750,7 +936,11 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             }
         }
         Expr::FieldAccess { object, field, .. } => {
-            gen_expr(object, out, ctx); out.push('.'); out.push_str(field);
+            if is_struct_var_ident(object, ctx) {
+                gen_expr(object, out, ctx); out.push_str(".borrow()."); out.push_str(field);
+            } else {
+                gen_expr(object, out, ctx); out.push('.'); out.push_str(field);
+            }
         }
         Expr::PostfixOp { expr, op, .. } => {
             gen_expr(expr, out, ctx);
@@ -769,12 +959,14 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::StructInit { name, fields, .. } => {
             if ctx.structs.contains(name) {
+                out.push_str("Rc::new(RefCell::new(");
                 out.push_str(name); out.push_str(" { ");
                 for (i, (fname, fval)) in fields.iter().enumerate() {
                     if i > 0 { out.push_str(", "); }
                     out.push_str(fname); out.push_str(": "); gen_expr(fval, out, ctx);
+                    if is_plain_string(fval) { out.push_str(".to_string()"); }
                 }
-                out.push_str(" }");
+                out.push_str(" }))");
             } else if let Some(en) = ctx.variant_to_enum.get(name) {
                 out.push_str(en); out.push_str("::"); out.push_str(name); out.push('(');
                 for (i, (_, fval)) in fields.iter().enumerate() {
@@ -911,7 +1103,7 @@ mod tests {
     fn test_impl_static_method() {
         let src = "struct Bar\n    v: Int\nend\n\nimpl Bar\n    fn new()\n        return Bar(v: 0)\n    end\nend\n\nb = Bar.new()";
         let code = gen(src).unwrap();
-        assert!(code.contains("fn new() -> Bar"));
+        assert!(code.contains("fn new() -> Rc<RefCell<Bar>>"));
         assert!(code.contains("Bar::new()"));
     }
 
@@ -921,5 +1113,31 @@ mod tests {
         let code = gen(src).unwrap();
         assert!(code.contains("trait Show {"));
         assert!(code.contains("fn show(&self) -> String;"));
+    }
+
+    #[test]
+    fn test_rc_struct_wrap() {
+        let code = gen("struct User\n    name: String\n    age: Int\nend\n\nu = User(name: \"test\", age: 1)\nprint(u.name)").unwrap();
+        assert!(code.contains("Rc::new(RefCell::new(User {"));
+        assert!(code.contains("u.borrow().name"));
+    }
+
+    #[test]
+    fn test_rc_mut_assign() {
+        let code = gen("struct P\n    x: Int\nend\n\np = P(x: 1)\np::x = 2").unwrap();
+        assert!(code.contains("p.borrow_mut().x = 2"));
+    }
+
+    #[test]
+    fn test_rc_fn_param_infer() {
+        let code = gen("struct User\n    name: String\nend\n\nfn show(u)\n    print(u.name)\nend").unwrap();
+        assert!(code.contains("fn show(u: Rc<RefCell<User>>)"));
+        assert!(code.contains("u.borrow().name"));
+    }
+
+    #[test]
+    fn test_rc_fn_call_clone() {
+        let code = gen("struct P\n    x: Int\nend\n\nfn f(p)\n    print(p.x)\nend\n\np = P(x: 1)\nf(p)\nf(p)").unwrap();
+        assert!(code.contains("f(p.clone())"));
     }
 }

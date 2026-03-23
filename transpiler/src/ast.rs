@@ -90,7 +90,7 @@ pub enum Expr {
     Identifier { name: String, span: Span },
     FunctionCall { name: String, args: Vec<Expr>, span: Span },
     Lambda { params: Vec<String>, body: Box<Expr>, span: Span },
-    MethodCall { object: Box<Expr>, method: String, args: Vec<Expr>, span: Span },
+    MethodCall { object: Box<Expr>, method: String, args: Vec<Expr>, is_mut: bool, span: Span },
     FieldAccess { object: Box<Expr>, field: String, span: Span },
     PostfixOp { expr: Box<Expr>, op: String, span: Span },
     BinaryOp { left: Box<Expr>, op: String, right: Box<Expr>, span: Span },

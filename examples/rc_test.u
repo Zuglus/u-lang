@@ -1,0 +1,16 @@
+// rc_test.u — проверка Rc<RefCell<>> для структур
+
+struct User
+    name: String
+    age: Int
+end
+
+fn show(user)
+    print("$(user.name): $(user.age)")
+end
+
+u = User(name: "Андрей", age: 30)
+show(u)
+show(u)
+u::name = "Иван"
+show(u)

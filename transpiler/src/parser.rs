@@ -353,11 +353,12 @@ fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
             for part in inner {
                 match part.as_rule() {
                     Rule::method_call | Rule::mut_method_call => {
+                        let is_mut = part.as_rule() == Rule::mut_method_call;
                         let ms = span(part.as_span());
                         let mut mc = part.into_inner();
                         let method = mc.next().unwrap().as_str().to_string();
                         let args = mc.next().map(|al| al.into_inner().map(|a| build_expression(a)).collect::<Result<Vec<_>, _>>()).transpose()?.unwrap_or_default();
-                        expr = Expr::MethodCall { object: Box::new(expr), method, args, span: ms };
+                        expr = Expr::MethodCall { object: Box::new(expr), method, args, is_mut, span: ms };
                     }
                     Rule::field_access => {
                         let fs = span(part.as_span());
