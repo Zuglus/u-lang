@@ -1,4 +1,4 @@
-// rc_test.u — проверка Rc<RefCell<>> для структур
+// rc_test.u — стек и move по умолчанию, & для borrowing
 
 struct User
     name: String
