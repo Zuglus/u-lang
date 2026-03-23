@@ -425,6 +425,32 @@ fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
             }
             Ok(Expr::StringLiteral { parts, span: s })
         }
+        Rule::raw_string_literal => {
+            let s = span(pair.as_span());
+            let inner = pair.into_inner().next().unwrap();
+            let part_rule = match inner.as_rule() {
+                Rule::raw_string_1 => Rule::raw_1_part,
+                Rule::raw_string_2 => Rule::raw_2_part,
+                _ => unreachable!(),
+            };
+            let mut parts = Vec::new();
+            for p in inner.into_inner().filter(|p| p.as_rule() == part_rule) {
+                let pi = p.into_inner().next().unwrap();
+                match pi.as_rule() {
+                    Rule::raw_1_text | Rule::raw_2_text | Rule::dollar_lit =>
+                        parts.push(StringPart::Text(pi.as_str().into())),
+                    Rule::interp_var => {
+                        let id = pi.into_inner().next().unwrap();
+                        parts.push(StringPart::Interpolation(Expr::Identifier { name: id.as_str().into(), span: span(id.as_span()) }));
+                    }
+                    Rule::interp_expr => {
+                        parts.push(StringPart::Interpolation(reparse_expression(pi.into_inner().next().unwrap().as_str())?));
+                    }
+                    _ => unreachable!("unexpected raw string part: {:?}", pi.as_rule()),
+                }
+            }
+            Ok(Expr::StringLiteral { parts, span: s })
+        }
         Rule::number => {
             let s = span(pair.as_span());
             let t = pair.as_str();

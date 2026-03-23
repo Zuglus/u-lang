@@ -1,0 +1,19 @@
+name = "Андрей"
+
+// обычная строка
+print("Привет, $name!")
+
+// raw с кавычками
+html = #"<div class="card">$name</div>"#
+print(html)
+
+// многострочная raw
+page = #"
+<html>
+<body class="main">
+    <h1>$name</h1>
+    <p>Цена $100</p>
+</body>
+</html>
+"#
+print(page)

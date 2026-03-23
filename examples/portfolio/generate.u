@@ -1,0 +1,93 @@
+// generate.u — portfolio site generator
+
+fn build_slide_json(slide) -> String
+    image = slide.image
+    task = slide.task
+    solution = slide.solution
+    return "{\"image\": \"$(image)\", \"task\": \"$(task)\", \"solution\": \"$(solution)\"}"
+end
+
+fn build_slides_json(slides) -> String
+    parts = []
+    for slide in slides
+        parts = push(parts, build_slide_json(slide))
+    end
+    return parts.join(", ")
+end
+
+fn build_card(project) -> String
+    title = project.title
+    desc = project.description
+    audience = project.audience
+    slides_json = build_slides_json(project.slides)
+    first_image = project.slides.first().image
+
+    card = "<div class=\"group cursor-pointer\" x-on:click=\"$dispatch('open-modal', {"
+    card = "$(card) id: '$(project.id)',"
+    card = "$(card) title: '$(title)',"
+    card = "$(card) description: '$(desc)',"
+    card = "$(card) audience: '$(audience)',"
+    card = "$(card) slides: [$(slides_json)]"
+    card = "$(card) })\">"
+    card = "$(card)<div class=\"relative overflow-hidden rounded-2xl bg-[#0a0d2e] border border-white/10 hover:border-white/20 transition-all duration-300 hover:-translate-y-2 hover:shadow-2xl hover:shadow-purple-900/20\">"
+    card = "$(card)<div class=\"aspect-[4/3] overflow-hidden\">"
+    card = "$(card)<img src=\"$(first_image)\" alt=\"$(title)\" class=\"w-full h-full object-cover group-hover:scale-105 transition-transform duration-500\" loading=\"lazy\">"
+    card = "$(card)</div>"
+    card = "$(card)<div class=\"p-5\">"
+    card = "$(card)<h3 class=\"text-xl font-semibold mb-2\">$(title)</h3>"
+    if desc.len() > 0
+        card = "$(card)<p class=\"text-gray-400 text-sm\">$(desc)</p>"
+    end
+    card = "$(card)</div></div></div>"
+    return card
+end
+
+// --- Main ---
+
+base_dir = "examples/portfolio"
+
+data_text = read_file("$(base_dir)/data.json")?
+data = parse_json(data_text)
+
+template = read_file("$(base_dir)/template.html")?
+
+// Build project cards
+cards = ""
+projects = data.projects
+total_slides = 0
+
+for project in projects
+    cards = "$(cards)$(build_card(project))\n"
+    total_slides = total_slides + len(project.slides)
+end
+
+// Substitute into template
+page = template.replace("{{PROJECTS}}", cards)
+page = page.replace("{{TITLE}}", data.title)
+page = page.replace("{{DESCRIPTION}}", data.description)
+
+// Create output directory
+create_dir("dist")?
+create_dir("dist/images")?
+create_dir("dist/images/niti")?
+create_dir("dist/images/code")?
+create_dir("dist/images/fizics")?
+create_dir("dist/images/presentations")?
+
+// Copy images from portfolio-astro clone
+src_images = "/tmp/portfolio-astro/src/assets/images"
+
+dirs = ["niti", "code", "fizics", "presentations"]
+for dir in dirs
+    files = list_dir("$(src_images)/$(dir)")?
+    for file in files
+        if file.ends_with(".png")
+            copy_file("$(src_images)/$(dir)/$(file)", "dist/images/$(dir)/$(file)")?
+        end
+    end
+end
+
+// Write output
+write_file("dist/index.html", page)?
+
+print("Собрано: $(len(projects)) проектов, $(total_slides) слайдов -> dist/")

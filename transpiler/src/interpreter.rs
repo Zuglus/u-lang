@@ -4,6 +4,27 @@ use std::panic::AssertUnwindSafe;
 use crate::ast::*;
 use std::fmt;
 
+fn json_to_value(v: serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::None,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() { Value::Int(i) }
+            else { Value::Float(n.as_f64().unwrap_or(0.0)) }
+        }
+        serde_json::Value::String(s) => Value::Str(s),
+        serde_json::Value::Array(arr) => {
+            Value::List(arr.into_iter().map(json_to_value).collect())
+        }
+        serde_json::Value::Object(obj) => {
+            let fields: HashMap<String, Value> = obj.into_iter()
+                .map(|(k, v)| (k, json_to_value(v)))
+                .collect();
+            Value::Struct { type_name: "Json".into(), fields }
+        }
+    }
+}
+
 // ── Value ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -987,6 +1008,21 @@ impl Interpreter {
                     .file_stem().and_then(|s| s.to_str())
                     .unwrap_or(&path);
                 Ok(Value::Str(stem.into()))
+            }
+            "copy_file" => {
+                let src = val_str(&args, 0, "copy_file")?;
+                let dst = val_str(&args, 1, "copy_file")?;
+                match std::fs::copy(&src, &dst) {
+                    Ok(_) => Ok(ok_val(Value::None)),
+                    Err(e) => Ok(err_val(e.to_string())),
+                }
+            }
+            "parse_json" => {
+                let text = val_str(&args, 0, "parse_json")?;
+                match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(v) => Ok(json_to_value(v)),
+                    Err(e) => Err(format!("parse_json: {}", e)),
+                }
             }
 
             // ── String functions ───────────────────────────────────────

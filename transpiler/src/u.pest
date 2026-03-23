@@ -66,7 +66,7 @@ unary          = { prefix_op* ~ operand }
 operand        = { primary ~ suffix* }
 suffix         = _{ NEWLINE* ~ method_call | NEWLINE* ~ field_access
                   | NEWLINE* ~ mut_method_call | postfix_op }
-primary        = { lambda | struct_init | function_call | string_literal | number | bool_literal
+primary        = { lambda | struct_init | function_call | raw_string_literal | string_literal | number | bool_literal
                  | paren_expr | list_literal | identifier }
 
 // Operators
@@ -99,6 +99,15 @@ interp_raw     = @{ (!")" ~ !"(" ~ ANY | "(" ~ interp_raw ~ ")")* }
 interp_var     = ${ "$" ~ identifier }
 string_text    = @{ (!("\"" | "$") ~ ANY)+ }
 dollar_lit     = @{ "$" }
+
+// Raw strings: #"..."#, ##"..."##
+raw_string_literal = ${ raw_string_2 | raw_string_1 }
+raw_string_1       = ${ "#\"" ~ raw_1_part* ~ "\"#" }
+raw_1_part         =  { interp_expr | interp_var | raw_1_text | dollar_lit }
+raw_1_text         = @{ (!("\"#" | "$") ~ ANY)+ }
+raw_string_2       = ${ "##\"" ~ raw_2_part* ~ "\"##" }
+raw_2_part         =  { interp_expr | interp_var | raw_2_text | dollar_lit }
+raw_2_text         = @{ (!("\"##" | "$") ~ ANY)+ }
 
 // Entry point for re-parsing interpolation expressions outside compound-atomic context
 expression_entry = { SOI ~ expression ~ EOI }

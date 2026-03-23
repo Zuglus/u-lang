@@ -891,6 +891,24 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 out.push(')');
                 return;
             }
+            // .len() → .len() as i64 (Rust returns usize, U uses i64)
+            if method == "len" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".len() as i64");
+                return;
+            }
+            // Native string methods needing &str args
+            if matches!(method.as_str(), "replace" | "starts_with" | "ends_with" | "contains") {
+                gen_expr(object, out, ctx);
+                out.push('.'); out.push_str(method); out.push('(');
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    out.push('&');
+                    gen_expr(arg, out, ctx);
+                }
+                out.push(')');
+                return;
+            }
             gen_expr(object, out, ctx);
             // exec/query with 2+ args → exec1/query1 with &second_arg
             if (method == "exec" || method == "query") && args.len() > 1 {
@@ -956,17 +974,34 @@ fn gen_args(args: &[Expr], out: &mut String, ctx: &Ctx) {
     }
 }
 
+fn raw_delimiters(parts: &[StringPart]) -> (String, String) {
+    let has_quote = parts.iter().any(|p| matches!(p, StringPart::Text(t) if t.contains('"')));
+    if !has_quote { return ("\"".into(), "\"".into()); }
+    let all_text: String = parts.iter()
+        .filter_map(|p| if let StringPart::Text(t) = p { Some(t.as_str()) } else { None })
+        .collect();
+    let mut n = 1;
+    loop {
+        let end = format!("\"{}", "#".repeat(n));
+        if !all_text.contains(&end) {
+            return (format!("r{}\"", "#".repeat(n)), end);
+        }
+        n += 1;
+    }
+}
+
 fn gen_string(parts: &[StringPart], out: &mut String, ctx: &Ctx) {
     let has_interp = parts.iter().any(|p| matches!(p, StringPart::Interpolation(_)));
+    let (open, close) = raw_delimiters(parts);
     if has_interp {
         let fmt = build_format(parts, ctx);
-        out.push_str("format!(\""); out.push_str(&fmt.template); out.push('"');
+        out.push_str("format!("); out.push_str(&open); out.push_str(&fmt.template); out.push_str(&close);
         for arg in &fmt.args { out.push_str(", "); out.push_str(arg); }
         out.push(')');
     } else {
-        out.push('"');
+        out.push_str(&open);
         for p in parts { if let StringPart::Text(t) = p { out.push_str(t); } }
-        out.push('"');
+        out.push_str(&close);
     }
 }
 
@@ -974,7 +1009,8 @@ fn gen_print(args: &[Expr], out: &mut String, ctx: &Ctx) {
     if args.len() == 1 {
         if let Expr::StringLiteral { parts, .. } = &args[0] {
             let fmt = build_format(parts, ctx);
-            out.push_str("println!(\""); out.push_str(&fmt.template); out.push('"');
+            let (open, close) = raw_delimiters(parts);
+            out.push_str("println!("); out.push_str(&open); out.push_str(&fmt.template); out.push_str(&close);
             for arg in &fmt.args { out.push_str(", "); out.push_str(arg); }
             out.push(')');
         } else {
