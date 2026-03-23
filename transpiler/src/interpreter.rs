@@ -190,6 +190,7 @@ fn err_val(msg: String) -> Value {
 impl Interpreter {
     pub fn new(cli_args: Vec<String>) -> Self {
         let mut scopes = vec![HashMap::new()];
+        scopes[0].insert("none".into(), Value::None);
         scopes[0].insert("Channel".into(), Value::Type("Channel".into()));
         scopes[0].insert("Sqlite".into(), Value::Type("Sqlite".into()));
         scopes[0].insert("Args".into(), Value::Type("Args".into()));

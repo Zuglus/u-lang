@@ -27,6 +27,14 @@ enum Cli {
         #[arg()]
         file: Option<PathBuf>,
     },
+    /// Format .u files
+    Fmt {
+        #[arg()]
+        files: Vec<PathBuf>,
+        /// Check formatting without making changes
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -56,6 +64,31 @@ fn main() -> anyhow::Result<()> {
             let ast = parse_file(&file)?;
             eprintln!("OK: {} statements", ast.statements.len());
             println!("{:#?}", ast);
+        }
+        Cli::Fmt { files, check } => {
+            let files = if files.is_empty() {
+                find_u_files(".")?
+            } else {
+                files
+            };
+            let mut needs_format = false;
+            for f in &files {
+                let source = std::fs::read_to_string(f)?;
+                let formatted = u::formatter::format(&source);
+                if source == formatted {
+                    continue;
+                }
+                if check {
+                    eprintln!("{}: needs formatting", f.display());
+                    needs_format = true;
+                } else {
+                    std::fs::write(f, &formatted)?;
+                    eprintln!("formatted: {}", f.display());
+                }
+            }
+            if check && needs_format {
+                std::process::exit(1);
+            }
         }
         Cli::Test { file } => {
             let files = match file {
