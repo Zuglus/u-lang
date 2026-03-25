@@ -70,9 +70,11 @@ addition       = { multiplication ~ (add_op ~ multiplication)* }
 multiplication = { unary ~ (mul_op ~ unary)* }
 unary          = { prefix_op* ~ operand }
 operand        = { primary ~ suffix* }
-suffix         = _{ NEWLINE* ~ method_call | NEWLINE* ~ field_access | postfix_op }
+suffix         = _{ NEWLINE* ~ method_call | NEWLINE* ~ field_access | index_access | postfix_op }
+index_access   = { "[" ~ expression ~ "]" }
 primary        = { lambda | struct_init | function_call | raw_string_literal | string_literal | number | bool_literal
-                 | paren_expr | list_literal | identifier }
+                 | none_literal | paren_expr | list_literal | identifier }
+none_literal   = @{ "none" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Operators
 comp_op    = { ">=" | "<=" | "!=" | "==" | ">" | "<" }

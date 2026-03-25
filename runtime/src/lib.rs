@@ -397,9 +397,19 @@ pub fn trim(s: &str) -> String {
     s.trim().to_string()
 }
 
+/// Convert i64 to f64
+pub fn float(n: i64) -> f64 {
+    n as f64
+}
+
 /// Generate a range [0..n)
 pub fn range(n: i64) -> Vec<i64> {
     (0..n).collect()
+}
+
+/// Generate a range [start..end)
+pub fn range2(start: i64, end: i64) -> Vec<i64> {
+    (start..end).collect()
 }
 
 /// Check if path is a directory

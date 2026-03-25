@@ -872,10 +872,13 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             out.push_str("_f64");
         }
         Expr::BoolLiteral { value, .. } => out.push_str(if *value { "true" } else { "false" }),
+        Expr::NoneLiteral { .. } => out.push_str("None"),
         Expr::Identifier { name, .. } => out.push_str(name),
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
-            out.push_str(name); out.push('(');
+            // range(start, end) → range2(start, end)
+            let fn_name = if name == "range" && args.len() == 2 { "range2" } else { name.as_str() };
+            out.push_str(fn_name); out.push('(');
             // Check if we have fn param info for adding & where needed
             if let Some(fn_p) = ctx.fn_params.get(name.as_str()) {
                 for (i, arg) in args.iter().enumerate() {
@@ -953,6 +956,49 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 out.push_str(".len() as i64");
                 return;
             }
+            // .first() → .first().copied()
+            if method == "first" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".first().copied()");
+                return;
+            }
+            // .last() → .last().copied()
+            if method == "last" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".last().copied()");
+                return;
+            }
+            // .sum() → .iter().sum::<i64>()
+            if method == "sum" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".iter().sum::<i64>()");
+                return;
+            }
+            // .filter(fn(x) expr) → .into_iter().filter(|x| expr).collect::<Vec<_>>()
+            // clone() preserves original, into_iter() gives owned values, filter gets &i64
+            if method == "filter" && args.len() == 1 {
+                if let Expr::Lambda { params, body, .. } = &args[0] {
+                    gen_expr(object, out, ctx);
+                    out.push_str(".clone().into_iter().filter(|&");
+                    out.push_str(&params.join(", &"));
+                    out.push_str("| ");
+                    gen_expr(body, out, ctx);
+                    out.push_str(").collect::<Vec<_>>()");
+                    return;
+                }
+            }
+            // .map(fn(x) expr) → .into_iter().map(|x| expr).collect::<Vec<_>>()
+            if method == "map" && args.len() == 1 {
+                if let Expr::Lambda { params, body, .. } = &args[0] {
+                    gen_expr(object, out, ctx);
+                    out.push_str(".clone().into_iter().map(|");
+                    out.push_str(&params.join(", "));
+                    out.push_str("| ");
+                    gen_expr(body, out, ctx);
+                    out.push_str(").collect::<Vec<_>>()");
+                    return;
+                }
+            }
             // Native string methods needing &str args
             if matches!(method.as_str(), "replace" | "starts_with" | "ends_with" | "contains") {
                 gen_expr(object, out, ctx);
@@ -996,6 +1042,13 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         Expr::UnaryOp { op, expr, .. } => {
             if op == "not" { out.push('!'); } else { out.push_str(op); }
             gen_expr(expr, out, ctx);
+        }
+        Expr::Index { object, index, .. } => {
+            gen_expr(object, out, ctx);
+            out.push('[');
+            gen_expr(index, out, ctx);
+            // Convert i64 index to usize for Vec
+            out.push_str(" as usize]");
         }
         Expr::List { elements, .. } => {
             out.push_str("vec!["); gen_args(elements, out, ctx); out.push(']');

@@ -406,6 +406,11 @@ fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
                         let fs = span(part.as_span());
                         expr = Expr::FieldAccess { object: Box::new(expr), field: part.into_inner().next().unwrap().as_str().into(), span: fs };
                     }
+                    Rule::index_access => {
+                        let is = span(part.as_span());
+                        let index = build_expression(part.into_inner().next().unwrap())?;
+                        expr = Expr::Index { object: Box::new(expr), index: Box::new(index), span: is };
+                    }
                     Rule::postfix_op => {
                         expr = Expr::PostfixOp { span: Span { start: s.start, end: s.end }, expr: Box::new(expr), op: part.as_str().into() };
                     }
@@ -500,6 +505,7 @@ fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
             else { Ok(Expr::IntLiteral { value: t.parse()?, span: s }) }
         }
         Rule::bool_literal => Ok(Expr::BoolLiteral { value: pair.as_str() == "true", span: span(pair.as_span()) }),
+        Rule::none_literal => Ok(Expr::NoneLiteral { span: span(pair.as_span()) }),
         Rule::identifier => Ok(Expr::Identifier { name: pair.as_str().into(), span: span(pair.as_span()) }),
         _ => unreachable!("unexpected: {:?}", pair.as_rule()),
     }

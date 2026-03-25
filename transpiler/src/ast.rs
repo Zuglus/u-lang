@@ -91,6 +91,7 @@ pub enum Expr {
     IntLiteral { value: i64, span: Span },
     FloatLiteral { value: f64, span: Span },
     BoolLiteral { value: bool, span: Span },
+    NoneLiteral { span: Span },
     Identifier { name: String, span: Span },
     FunctionCall { name: String, args: Vec<Expr>, span: Span },
     Lambda { params: Vec<String>, body: Box<Expr>, span: Span },
@@ -100,6 +101,7 @@ pub enum Expr {
     BinaryOp { left: Box<Expr>, op: String, right: Box<Expr>, span: Span },
     UnaryOp { op: String, expr: Box<Expr>, span: Span },
     List { elements: Vec<Expr>, span: Span },
+    Index { object: Box<Expr>, index: Box<Expr>, span: Span },
     StructInit { name: String, fields: Vec<(String, Expr)>, span: Span },
 }
 
