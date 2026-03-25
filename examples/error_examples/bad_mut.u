@@ -1,0 +1,12 @@
+// Ошибка: мутация без mut
+struct Counter
+    value: Int
+end
+
+fn increment(c: Counter)
+    c.value = c.value + 1
+end
+
+counter = Counter(value: 0)
+increment(counter)
+print(counter.value)

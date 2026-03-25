@@ -298,7 +298,7 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let deps = analyze_deps(&ast);
-    build_rust_project(stem, &rust_code, u_dir, &rs_modules, &deps, u_filename)
+    build_rust_project(stem, &rust_code, u_dir, &rs_modules, &deps, u_filename, Some(&source))
 }
 
 fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBuf> {
@@ -324,7 +324,7 @@ fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBu
     let stem = format!("{}_test",
         path.file_stem().and_then(|s| s.to_str()).unwrap_or("test"));
     let deps = analyze_deps(&ast);
-    build_rust_project(&stem, &rust_code, u_dir, &rs_modules, &deps, u_filename)
+    build_rust_project(&stem, &rust_code, u_dir, &rs_modules, &deps, u_filename, Some(&source))
 }
 
 fn find_rs_modules(dir: &Path) -> Vec<String> {
@@ -380,7 +380,7 @@ fn generate_test_runner(test_names: &[String]) -> String {
 
 fn build_rust_project(
     stem: &str, rust_code: &str, u_dir: &Path, rs_modules: &[String],
-    deps: &Deps, u_filename: &str,
+    deps: &Deps, u_filename: &str, u_source: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
     let project_dir = cache_dir_for(stem);
     let src_dir = project_dir.join("src");
@@ -445,56 +445,10 @@ tokio = {{ version = "1", features = ["full"] }}
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let mapped = remap_errors(&stderr, rust_code, u_filename);
+        let mapped = u::error_mapper::map_errors(&stderr, rust_code, u_filename, u_source);
         anyhow::bail!("build error:\n{}", mapped);
     }
 
     Ok(project_dir.join("target/release").join(stem))
 }
 
-fn remap_errors(stderr: &str, rust_code: &str, u_filename: &str) -> String {
-    // Build mapping: generated_line → closest u source line
-    let mut line_map: Vec<usize> = Vec::new();
-    let mut last_u_line = 0;
-    for line in rust_code.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("// line:") {
-            if let Ok(n) = rest.parse::<usize>() {
-                last_u_line = n;
-            }
-        }
-        line_map.push(last_u_line);
-    }
-
-    let mut result = String::new();
-    for line in stderr.lines() {
-        if let Some(pos) = line.find("src/main.rs:") {
-            let after = &line[pos + "src/main.rs:".len()..];
-            let num_end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
-            if num_end > 0 {
-                if let Ok(gen_line) = after[..num_end].parse::<usize>() {
-                    let u_line = if gen_line > 0 && gen_line <= line_map.len() {
-                        line_map[gen_line - 1]
-                    } else { 0 };
-                    if u_line > 0 {
-                        result.push_str(&line[..pos]);
-                        result.push_str(u_filename);
-                        result.push(':');
-                        result.push_str(&u_line.to_string());
-                        let mut skip = num_end;
-                        if after.as_bytes().get(skip) == Some(&b':') {
-                            skip += 1;
-                            skip += after[skip..].find(|c: char| !c.is_ascii_digit()).unwrap_or(after[skip..].len());
-                        }
-                        result.push_str(&after[skip..]);
-                        result.push('\n');
-                        continue;
-                    }
-                }
-            }
-        }
-        result.push_str(line);
-        result.push('\n');
-    }
-    result
-}
