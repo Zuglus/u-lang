@@ -13,8 +13,8 @@ impl Counter
         return self.value
     end
 
-    fn increment(::self)
-        self::value = self.value + 1
+    fn increment(mut self)
+        self.value = self.value + 1
     end
 end
 
@@ -31,9 +31,9 @@ end
 c = Counter.new()
 print("Start: $(c.get())")
 
-c::increment()
-c::increment()
-c::increment()
+c.increment()
+c.increment()
+c.increment()
 
 print("After: $(c.get())")
 print(c.describe())

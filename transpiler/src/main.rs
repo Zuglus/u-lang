@@ -1,5 +1,7 @@
 use clap::Parser;
-use std::path::PathBuf;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "u", about = "U language transpiler")]
@@ -46,19 +48,11 @@ fn main() -> anyhow::Result<()> {
             eprintln!("Built: {}", bin.display());
         }
         Cli::Run { file, args } => {
-            let ast = parse_file(&file)?;
-            if u::interpreter::has_memory_decl(&ast) {
-                // Project mode — compile through Rust
-                let bin = compile(&file)?;
-                let status = std::process::Command::new(&bin)
-                    .args(&args)
-                    .status()?;
-                std::process::exit(status.code().unwrap_or(1));
-            } else {
-                // Script mode — interpret directly
-                let mut interp = u::interpreter::Interpreter::new(args);
-                interp.run(&ast).map_err(|e| anyhow::anyhow!("{}", e))?;
-            }
+            let bin = build_cached(&file)?;
+            let status = std::process::Command::new(&bin)
+                .args(&args)
+                .status()?;
+            std::process::exit(status.code().unwrap_or(1));
         }
         Cli::Check { file } => {
             let ast = parse_file(&file)?;
@@ -66,18 +60,12 @@ fn main() -> anyhow::Result<()> {
             println!("{:#?}", ast);
         }
         Cli::Fmt { files, check } => {
-            let files = if files.is_empty() {
-                find_u_files(".")?
-            } else {
-                files
-            };
+            let files = if files.is_empty() { find_u_files(".")? } else { files };
             let mut needs_format = false;
             for f in &files {
                 let source = std::fs::read_to_string(f)?;
                 let formatted = u::formatter::format(&source);
-                if source == formatted {
-                    continue;
-                }
+                if source == formatted { continue; }
                 if check {
                     eprintln!("{}: needs formatting", f.display());
                     needs_format = true;
@@ -86,40 +74,56 @@ fn main() -> anyhow::Result<()> {
                     eprintln!("formatted: {}", f.display());
                 }
             }
-            if check && needs_format {
-                std::process::exit(1);
-            }
+            if check && needs_format { std::process::exit(1); }
         }
         Cli::Test { file } => {
             let files = match file {
                 Some(f) => vec![f],
                 None => find_u_files(".")?,
             };
-            let mut total_passed = 0;
-            let mut total_failed = 0;
+            let mut total_passed = 0u32;
+            let mut total_failed = 0u32;
             for f in &files {
                 let source = std::fs::read_to_string(f)?;
                 let ast = u::parser::parse(&source)?;
-                let has_tests = ast.statements.iter().any(|s|
-                    matches!(s, u::ast::Stmt::FnDef { is_test: true, .. }));
-                if !has_tests { continue; }
-                if files.len() > 1 {
-                    eprintln!("--- {} ---", f.display());
+                let test_names: Vec<String> = ast.statements.iter().filter_map(|s| {
+                    if let u::ast::Stmt::FnDef { name, is_test: true, .. } = s {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                }).collect();
+                if test_names.is_empty() { continue; }
+                if files.len() > 1 { eprintln!("--- {} ---", f.display()); }
+
+                let bin = compile_tests(f, &test_names)?;
+                let output = std::process::Command::new(&bin).output()?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                print!("{}", stdout);
+                if !output.stderr.is_empty() {
+                    eprint!("{}", String::from_utf8_lossy(&output.stderr));
                 }
-                let mut interp = u::interpreter::Interpreter::new(vec![]);
-                let (p, f) = interp.run_tests(&ast);
-                total_passed += p;
-                total_failed += f;
+
+                // Parse "N passed, M failed" from output
+                for line in stdout.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 4 && parts[1] == "passed," && parts[3] == "failed" {
+                        total_passed += parts[0].parse::<u32>().unwrap_or(0);
+                        total_failed += parts[2].parse::<u32>().unwrap_or(0);
+                    }
+                }
             }
-            println!("\n{} passed, {} failed", total_passed, total_failed);
-            if total_failed > 0 {
-                std::process::exit(1);
+            if total_passed > 0 || total_failed > 0 {
+                println!("\n{} passed, {} failed", total_passed, total_failed);
             }
+            if total_failed > 0 { std::process::exit(1); }
         }
     }
 
     Ok(())
 }
+
+// ─── File discovery ─────────────────────────────────────
 
 fn find_u_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -140,45 +144,265 @@ fn parse_file(path: &PathBuf) -> anyhow::Result<u::ast::Program> {
     u::parser::parse(&source)
 }
 
+// ─── Caching ────────────────────────────────────────────
+
+fn build_cached(path: &PathBuf) -> anyhow::Result<PathBuf> {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let cache_dir = cache_dir_for(stem);
+    let hash_file = cache_dir.join("hash");
+    let bin_path = cache_dir.join("target/release").join(stem);
+
+    let source = std::fs::read_to_string(path)?;
+    let hash = compute_hash(path, &source)?;
+
+    // Check cache — if hash matches, run cached binary directly
+    if bin_path.exists() {
+        if let Ok(cached) = std::fs::read_to_string(&hash_file) {
+            if cached.trim() == hash {
+                return Ok(bin_path);
+            }
+        }
+    }
+
+    // Compile
+    let compiled = compile(path)?;
+
+    // Store hash
+    std::fs::create_dir_all(&cache_dir)?;
+    std::fs::write(&hash_file, &hash)?;
+
+    Ok(compiled)
+}
+
+fn compute_hash(path: &PathBuf, source: &str) -> anyhow::Result<String> {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+
+    // Also hash .rs files in same directory
+    let dir = path.parent().unwrap_or(Path::new("."));
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut rs_files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rs"))
+            .collect();
+        rs_files.sort();
+        for f in rs_files {
+            if let Ok(content) = std::fs::read_to_string(&f) {
+                content.hash(&mut hasher);
+            }
+        }
+    }
+
+    Ok(format!("{:016x}", hasher.finish()))
+}
+
+fn cache_dir_for(stem: &str) -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(home).join(".u-cache").join(stem)
+}
+
+// ─── Dependency analysis ────────────────────────────────
+
+struct Deps {
+    sqlite: bool,
+    http: bool,
+    json: bool,
+}
+
+fn analyze_deps(program: &u::ast::Program) -> Deps {
+    let mut deps = Deps { sqlite: false, http: false, json: false };
+    for stmt in &program.statements {
+        scan_stmt(stmt, &mut deps);
+    }
+    deps
+}
+
+fn scan_stmt(stmt: &u::ast::Stmt, deps: &mut Deps) {
+    use u::ast::*;
+    match stmt {
+        Stmt::Assignment { value, .. } => scan_expr(value, deps),
+        Stmt::ExprStmt { expr, .. } => scan_expr(expr, deps),
+        Stmt::FnDef { body, .. } => { for s in body { scan_stmt(s, deps); } }
+        Stmt::ForLoop { iter, body, .. } => {
+            scan_expr(iter, deps);
+            for s in body { scan_stmt(s, deps); }
+        }
+        Stmt::If { condition, body, elifs, else_body, .. } => {
+            scan_expr(condition, deps);
+            for s in body { scan_stmt(s, deps); }
+            for (c, b) in elifs { scan_expr(c, deps); for s in b { scan_stmt(s, deps); } }
+            if let Some(eb) = else_body { for s in eb { scan_stmt(s, deps); } }
+        }
+        Stmt::Return { value: Some(v), .. } => scan_expr(v, deps),
+        Stmt::Match { expr, arms, .. } => {
+            scan_expr(expr, deps);
+            for arm in arms { scan_stmt(&arm.body, deps); }
+        }
+        Stmt::MutAssign { object, value, .. } => { scan_expr(object, deps); scan_expr(value, deps); }
+        Stmt::Spawn { expr, .. } => scan_expr(expr, deps),
+        Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => { for s in body { scan_stmt(s, deps); } }
+        Stmt::ImplBlock { methods, .. } => { for m in methods { scan_stmt(m, deps); } }
+        _ => {}
+    }
+}
+
+fn scan_expr(expr: &u::ast::Expr, deps: &mut Deps) {
+    use u::ast::*;
+    match expr {
+        Expr::Identifier { name, .. } => check_ident(name, deps),
+        Expr::FunctionCall { name, args, .. } => {
+            check_ident(name, deps);
+            for a in args { scan_expr(a, deps); }
+        }
+        Expr::MethodCall { object, args, .. } => {
+            scan_expr(object, deps);
+            for a in args { scan_expr(a, deps); }
+        }
+        Expr::FieldAccess { object, .. } => scan_expr(object, deps),
+        Expr::BinaryOp { left, right, .. } => { scan_expr(left, deps); scan_expr(right, deps); }
+        Expr::UnaryOp { expr: e, .. } | Expr::PostfixOp { expr: e, .. } => scan_expr(e, deps),
+        Expr::Lambda { body, .. } => scan_expr(body, deps),
+        Expr::List { elements, .. } => { for e in elements { scan_expr(e, deps); } }
+        Expr::StructInit { name, fields, .. } => {
+            check_ident(name, deps);
+            for (_, f) in fields { scan_expr(f, deps); }
+        }
+        Expr::StringLiteral { parts, .. } => {
+            for p in parts {
+                if let StringPart::Interpolation(e) = p { scan_expr(e, deps); }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn check_ident(name: &str, deps: &mut Deps) {
+    match name {
+        "Sqlite" => deps.sqlite = true,
+        "HttpServer" | "Router" | "Response" | "serve" => deps.http = true,
+        "parse_json" | "to_json" => deps.json = true,
+        _ => {}
+    }
+}
+
+// ─── Compilation ────────────────────────────────────────
+
 fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     let source = std::fs::read_to_string(path)?;
     let ast = u::parser::parse(&source)?;
     let u_filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("input.u");
+    let u_dir = path.parent().unwrap_or(Path::new("."));
+    let rs_modules = find_rs_modules(u_dir);
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &rs_modules)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let deps = analyze_deps(&ast);
+    build_rust_project(stem, &rust_code, u_dir, &rs_modules, &deps, u_filename)
+}
 
-    // Find .rs files in the same directory as the .u file
-    let u_dir = path.parent().unwrap_or(std::path::Path::new("."));
-    let mut rs_modules: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(u_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("rs") {
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    rs_modules.push(stem.to_string());
-                }
-            }
-        }
-    }
-    rs_modules.sort();
+fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBuf> {
+    let source = std::fs::read_to_string(path)?;
+    let ast = u::parser::parse(&source)?;
+    let u_filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("input.u");
+    let u_dir = path.parent().unwrap_or(Path::new("."));
+    let rs_modules = find_rs_modules(u_dir);
 
     let rust_code = u::generator::generate(&ast, &source, u_filename, &rs_modules)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
+    // Replace #[tokio::main] and everything after with test runner
+    let rust_code = fixup_assertions(&rust_code);
+    let rust_code = if let Some(pos) = rust_code.find("#[tokio::main]") {
+        let mut code = rust_code[..pos].to_string();
+        code.push_str(&generate_test_runner(test_names));
+        code
+    } else {
+        rust_code
+    };
 
-    // Persistent cargo project per .u file — cached builds
-    let project_dir = std::env::temp_dir().join("u-lang").join(stem);
+    let stem = format!("{}_test",
+        path.file_stem().and_then(|s| s.to_str()).unwrap_or("test"));
+    let deps = analyze_deps(&ast);
+    build_rust_project(&stem, &rust_code, u_dir, &rs_modules, &deps, u_filename)
+}
+
+fn find_rs_modules(dir: &Path) -> Vec<String> {
+    let mut modules = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    modules.push(stem.to_string());
+                }
+            }
+        }
+    }
+    modules.sort();
+    modules
+}
+
+/// Convert U's assert/assert_eq function calls to Rust macros
+fn fixup_assertions(code: &str) -> String {
+    code.replace("assert_eq(", "assert_eq!(")
+        .replace("assert(", "assert!(")
+}
+
+fn generate_test_runner(test_names: &[String]) -> String {
+    let mut r = String::new();
+    r.push_str("fn main() {\n");
+    r.push_str("    std::panic::set_hook(Box::new(|_| {}));\n");
+    r.push_str("    let mut passed = 0u32;\n");
+    r.push_str("    let mut failed = 0u32;\n\n");
+
+    for name in test_names {
+        r.push_str(&format!("    print!(\"  {} ... \");\n", name));
+        r.push_str(&format!(
+            "    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{ {}(); }})) {{\n",
+            name
+        ));
+        r.push_str("        Ok(_) => { println!(\"ok\"); passed += 1; }\n");
+        r.push_str("        Err(e) => {\n");
+        r.push_str("            let msg = e.downcast_ref::<String>().map(|s| s.as_str())\n");
+        r.push_str("                .or_else(|| e.downcast_ref::<&str>().copied())\n");
+        r.push_str("                .unwrap_or(\"panic\");\n");
+        r.push_str("            println!(\"FAIL: {}\", msg); failed += 1;\n");
+        r.push_str("        }\n");
+        r.push_str("    }\n\n");
+    }
+
+    r.push_str("    println!(\"\\n{} passed, {} failed\", passed, failed);\n");
+    r.push_str("    if failed > 0 { std::process::exit(1); }\n");
+    r.push_str("}\n");
+    r
+}
+
+fn build_rust_project(
+    stem: &str, rust_code: &str, u_dir: &Path, rs_modules: &[String],
+    deps: &Deps, u_filename: &str,
+) -> anyhow::Result<PathBuf> {
+    let project_dir = cache_dir_for(stem);
     let src_dir = project_dir.join("src");
     std::fs::create_dir_all(&src_dir)?;
 
-    // Runtime path relative to transpiler at compile time
+    // Runtime path (resolved at transpiler compile time)
     let runtime_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime"));
     let runtime_path = runtime_dir.canonicalize()
         .map_err(|e| anyhow::anyhow!("runtime crate not found at {}: {}", runtime_dir.display(), e))?;
 
-    // Write Cargo.toml (only if changed)
+    // Build features list based on AST analysis
+    let mut features = Vec::new();
+    if deps.sqlite { features.push("\"sqlite\""); }
+    if deps.http { features.push("\"http\""); }
+    if deps.json { features.push("\"json\""); }
+
+    let features_str = if features.is_empty() {
+        String::new()
+    } else {
+        format!(", features = [{}]", features.join(", "))
+    };
+
     let cargo_toml = format!(
 r#"[package]
 name = "{stem}"
@@ -186,11 +410,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-u-runtime = {{ path = "{}" }}
+u-runtime = {{ path = "{}"{features_str} }}
 tokio = {{ version = "1", features = ["full"] }}
 "#,
         runtime_path.display()
     );
+
     let cargo_path = project_dir.join("Cargo.toml");
     let needs_update = std::fs::read_to_string(&cargo_path)
         .map(|old| old != cargo_toml)
@@ -199,15 +424,16 @@ tokio = {{ version = "1", features = ["full"] }}
         std::fs::write(&cargo_path, &cargo_toml)?;
     }
 
-    // Copy .rs module files to generated project
-    for module in &rs_modules {
-        let src_file = u_dir.join(format!("{}.rs", module));
-        let dst_file = src_dir.join(format!("{}.rs", module));
-        std::fs::copy(&src_file, &dst_file)?;
+    // Copy .rs module files
+    for module in rs_modules {
+        std::fs::copy(
+            u_dir.join(format!("{}.rs", module)),
+            src_dir.join(format!("{}.rs", module)),
+        )?;
     }
 
     // Write generated source
-    std::fs::write(src_dir.join("main.rs"), &rust_code)?;
+    std::fs::write(src_dir.join("main.rs"), rust_code)?;
 
     // Build with cargo
     let output = std::process::Command::new("cargo")
@@ -219,7 +445,7 @@ tokio = {{ version = "1", features = ["full"] }}
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let mapped = remap_errors(&stderr, &rust_code, u_filename);
+        let mapped = remap_errors(&stderr, rust_code, u_filename);
         anyhow::bail!("build error:\n{}", mapped);
     }
 
@@ -255,7 +481,6 @@ fn remap_errors(stderr: &str, rust_code: &str, u_filename: &str) -> String {
                         result.push_str(u_filename);
                         result.push(':');
                         result.push_str(&u_line.to_string());
-                        // Skip original line:col
                         let mut skip = num_end;
                         if after.as_bytes().get(skip) == Some(&b':') {
                             skip += 1;

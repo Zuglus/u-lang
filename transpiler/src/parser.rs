@@ -18,7 +18,8 @@ fn is_kw(rule: Rule) -> bool {
         | Rule::elif_kw | Rule::else_kw | Rule::end_kw | Rule::return_kw
         | Rule::struct_kw | Rule::enum_kw | Rule::match_kw
         | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw
-        | Rule::trait_kw | Rule::impl_kw | Rule::test_kw)
+        | Rule::trait_kw | Rule::impl_kw | Rule::test_kw | Rule::mut_kw
+        | Rule::break_kw | Rule::continue_kw | Rule::while_kw)
 }
 
 fn meaningful(pairs: pest::iterators::Pairs<Rule>) -> impl Iterator<Item = pest::iterators::Pair<Rule>> + '_ {
@@ -180,10 +181,24 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
         Rule::mutation_stmt => {
             let s = span(inner.as_span());
             let mut p = inner.into_inner();
-            let object = build_expression(p.next().unwrap())?;
+            let obj_name = p.next().unwrap().as_str().to_string();
             let field = p.next().unwrap().as_str().to_string();
             let value = build_expression(p.next().unwrap())?;
+            let object = Expr::Identifier { name: obj_name, span: s.clone() };
             Ok(Stmt::MutAssign { object, field, value, span: s })
+        }
+        Rule::while_loop => {
+            let s = span(inner.as_span());
+            let mut p = meaningful(inner.into_inner());
+            let condition = build_expression(p.next().unwrap())?;
+            let body = build_block(p.next().unwrap())?;
+            Ok(Stmt::WhileLoop { condition, body, span: s })
+        }
+        Rule::break_stmt => {
+            Ok(Stmt::Break { span: span(inner.as_span()) })
+        }
+        Rule::continue_stmt => {
+            Ok(Stmt::Continue { span: span(inner.as_span()) })
         }
         Rule::spawn_stmt => {
             let s = span(inner.as_span());
@@ -352,8 +367,8 @@ fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
             let mut expr = build_expression(inner.next().unwrap())?;
             for part in inner {
                 match part.as_rule() {
-                    Rule::method_call | Rule::mut_method_call => {
-                        let is_mut = part.as_rule() == Rule::mut_method_call;
+                    Rule::method_call => {
+                        let is_mut = false;
                         let ms = span(part.as_span());
                         let mut mc = part.into_inner();
                         let method = mc.next().unwrap().as_str().to_string();

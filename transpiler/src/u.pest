@@ -3,8 +3,8 @@
 program = { SOI ~ NEWLINE* ~ (statement ~ (NEWLINE+ | &EOI))* ~ EOI }
 
 // Statements
-statement = { memory_stmt | use_stmt | struct_def | type_def | trait_def | impl_block | test_fn_def | fn_def | for_loop | loop_stmt | if_stmt | match_stmt
-            | spawn_stmt | return_stmt | mutation_stmt | assignment | expr_stmt }
+statement = { memory_stmt | use_stmt | struct_def | type_def | trait_def | impl_block | test_fn_def | fn_def | for_loop | while_loop | loop_stmt | if_stmt | match_stmt
+            | spawn_stmt | return_stmt | break_stmt | continue_stmt | mutation_stmt | assignment | expr_stmt }
 
 test_fn_def = { test_kw ~ fn_def }
 
@@ -23,16 +23,19 @@ for_loop    = { for_kw ~ for_pattern ~ in_kw ~ expression ~ NEWLINE+ ~ block ~ e
 loop_stmt   = { loop_kw ~ NEWLINE+ ~ block ~ end_kw }
 if_stmt     = { if_kw ~ expression ~ NEWLINE+ ~ block ~ elif_clause* ~ else_clause? ~ end_kw }
 match_stmt  = { match_kw ~ expression ~ NEWLINE+ ~ (match_arm ~ NEWLINE+)* ~ end_kw }
-spawn_stmt  = { spawn_kw ~ expression }
-return_stmt = { return_kw ~ expression? }
-mutation_stmt = { operand ~ "::" ~ identifier ~ "=" ~ expression }
+spawn_stmt    = { spawn_kw ~ expression }
+return_stmt   = { return_kw ~ expression? }
+break_stmt    = { break_kw }
+continue_stmt = { continue_kw }
+while_loop    = { while_kw ~ expression ~ NEWLINE+ ~ block ~ end_kw }
+mutation_stmt = { identifier ~ "." ~ identifier ~ "=" ~ expression }
 assignment  = { identifier ~ "=" ~ expression }
 expr_stmt   = { expression }
 
 // Function params with optional types
 fn_params = { fn_param ~ ("," ~ fn_param)* }
 fn_param   = { mut_marker? ~ identifier ~ (":" ~ identifier)? }
-mut_marker = { "::" }
+mut_marker = { mut_kw }
 fn_ret    = { "->" ~ identifier }
 
 // Struct / type fields
@@ -64,8 +67,7 @@ addition       = { multiplication ~ (add_op ~ multiplication)* }
 multiplication = { unary ~ (mul_op ~ unary)* }
 unary          = { prefix_op* ~ operand }
 operand        = { primary ~ suffix* }
-suffix         = _{ NEWLINE* ~ method_call | NEWLINE* ~ field_access
-                  | NEWLINE* ~ mut_method_call | postfix_op }
+suffix         = _{ NEWLINE* ~ method_call | NEWLINE* ~ field_access | postfix_op }
 primary        = { lambda | struct_init | function_call | raw_string_literal | string_literal | number | bool_literal
                  | paren_expr | list_literal | identifier }
 
@@ -83,7 +85,6 @@ named_arg_list  = { named_arg ~ ("," ~ named_arg)* }
 named_arg       = { identifier ~ ":" ~ expression }
 function_call   = { identifier ~ "(" ~ arg_list? ~ ")" }
 method_call     = { "." ~ identifier ~ "(" ~ arg_list? ~ ")" }
-mut_method_call = { "::" ~ identifier ~ "(" ~ arg_list? ~ ")" }
 field_access    = { "." ~ identifier }
 postfix_op      = { "?" | bang_op }
 bang_op         = @{ "!" ~ !"=" }
@@ -117,7 +118,8 @@ identifier   = @{ !keyword ~ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_")* }
 keyword      = _{ ("if" | "elif" | "else" | "end" | "for" | "while" | "fn" | "return"
                  | "true" | "false" | "and" | "or" | "not" | "in" | "match" | "struct"
                  | "enum" | "trait" | "impl" | "use" | "memory" | "pub" | "unsafe"
-                 | "weak" | "test" | "spawn" | "loop" | "pass") ~ !(LETTER | ASCII_DIGIT | "_") }
+                 | "weak" | "test" | "spawn" | "loop" | "pass" | "mut" | "break"
+                 | "continue") ~ !(LETTER | ASCII_DIGIT | "_") }
 bool_literal = @{ ("true" | "false") ~ !(LETTER | ASCII_DIGIT | "_") }
 number       = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 
@@ -139,7 +141,11 @@ memory_kw = @{ "memory" ~ !(LETTER | ASCII_DIGIT | "_") }
 use_kw    = @{ "use" ~ !(LETTER | ASCII_DIGIT | "_") }
 trait_kw  = @{ "trait" ~ !(LETTER | ASCII_DIGIT | "_") }
 impl_kw   = @{ "impl" ~ !(LETTER | ASCII_DIGIT | "_") }
-test_kw   = @{ "test" ~ !(LETTER | ASCII_DIGIT | "_") }
+test_kw     = @{ "test" ~ !(LETTER | ASCII_DIGIT | "_") }
+mut_kw      = @{ "mut" ~ !(LETTER | ASCII_DIGIT | "_") }
+break_kw    = @{ "break" ~ !(LETTER | ASCII_DIGIT | "_") }
+continue_kw = @{ "continue" ~ !(LETTER | ASCII_DIGIT | "_") }
+while_kw    = @{ "while" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Implicit rules
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }

@@ -19,8 +19,8 @@ end
 test fn test_parent_child()
     p = Parent(name: "parent", child: none)
     c = Child(name: "child", parent: p)
-    p::child = c
-    // p.child — это КОПИЯ c, сделанная в момент p::child = c
+    p.child = c
+    // p.child — это КОПИЯ c, сделанная в момент p.child = c
     // c.parent — это КОПИЯ p, сделанная в момент c = Child(..., parent: p)
     assert_eq(p.child.name, "child")
     assert_eq(c.parent.name, "parent")
@@ -39,10 +39,10 @@ test fn test_linked_list()
     a = Node(value: 1, next: none, prev: none)
     b = Node(value: 2, next: none, prev: none)
     c = Node(value: 3, next: none, prev: none)
-    a::next = b
-    b::prev = a
-    b::next = c
-    c::prev = b
+    a.next = b
+    b.prev = a
+    b.next = c
+    c.prev = b
     assert_eq(a.next.value, 2)
     assert_eq(b.prev.value, 1)
     assert_eq(b.next.value, 3)
@@ -55,9 +55,9 @@ test fn test_ring()
     a = Node(value: 1, next: none, prev: none)
     b = Node(value: 2, next: none, prev: none)
     c = Node(value: 3, next: none, prev: none)
-    a::next = b
-    b::next = c
-    c::next = a
+    a.next = b
+    b.next = c
+    c.next = a
     // Если by-value: a.next = копия b (когда b.next ещё none)
     // Значит a.next.next = none, а не c
     // Если by-reference: a.next.next.next.value == 1 (кольцо)
@@ -75,9 +75,9 @@ end
 test fn test_mutation_isolation()
     a = Node(value: 1, next: none, prev: none)
     b = Node(value: 2, next: none, prev: none)
-    a::next = b
+    a.next = b
     // Теперь меняем b — отражается ли в a.next?
-    b::value = 999
+    b.value = 999
     // Если by-value: a.next.value == 2 (копия не затронута)
     // Если by-reference: a.next.value == 999
     assert_eq(b.value, 999)
@@ -95,8 +95,8 @@ end
 test fn test_friends()
     a = Person(name: "Андрей", friend: none)
     b = Person(name: "Иван", friend: none)
-    a::friend = b
-    b::friend = a
+    a.friend = b
+    b.friend = a
     assert_eq(a.friend.name, "Иван")
     assert_eq(b.friend.name, "Андрей")
     // a.friend — копия b (когда b.friend ещё none)

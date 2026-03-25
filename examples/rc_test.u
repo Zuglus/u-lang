@@ -12,5 +12,5 @@ end
 u = User(name: "Андрей", age: 30)
 show(u)
 show(u)
-u::name = "Иван"
+u.name = "Иван"
 show(u)

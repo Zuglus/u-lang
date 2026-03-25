@@ -3,7 +3,7 @@
 Kotlin для Rust. Удобный язык поверх Rust-экосистемы.
 
 - `.u` и `.rs` в одном проекте, один build, бесшовные вызовы
-- `u run` — интерпретатор, 0.01 сек старт
+- `u run` — компиляция + кэш, 0.01 сек повторно
 - `u build` — компиляция через Rust, нативная скорость
 - Вся экосистема crates.io доступна
 
@@ -46,10 +46,26 @@ cargo install --path .
 ## Запуск
 
 ```bash
-u run examples/hello.u          # интерпретатор (0.01s)
+u run examples/hello.u          # компиляция + кэш (0.01s)
 u build examples/hello.u        # компиляция → нативный бинарник
 u check examples/hello.u        # парсинг без выполнения
+u test examples/test_demo.u     # запуск тестов
+u fmt examples/hello.u          # форматирование
 ```
+
+## Мутация — `mut`
+
+```
+// мутация — mut в определении
+fn increment(mut self)
+    self.value = self.value + 1
+end
+
+// вызов — всегда через .
+c.increment()
+```
+
+`mut` в определении функции/метода — единственный маркер мутации. При вызове — всегда `.`. Компилятор генерирует `&` или `&mut` автоматически.
 
 ## Отличия от Rust
 
@@ -59,7 +75,7 @@ u check examples/hello.u        # парсинг без выполнения
 | нет `;` | `;` | Упрощение |
 | `fn(x) expr` | `\|x\| expr` | Клавиатура |
 | `$name` | `format!("{name}")` | Упрощение |
-| `::` мутация | `&mut` | Видимость мутации |
+| `mut` в сигнатуре | `&mut` при вызове | Проще — маркер только в определении |
 | нет `let` | `let`/`let mut` | Упрощение |
 | `spawn f()` | `tokio::spawn(...)` | Упрощение |
 | скрипт по умолчанию | `fn main()` | Упрощение |
@@ -70,30 +86,30 @@ u check examples/hello.u        # парсинг без выполнения
 |---------|-----------|
 | `u run hello.u` | 0.01 сек |
 | `u run todo_cli.u` (Sqlite) | 0.01 сек |
-| HTTP-сервер (Router + hyper) | 35,342 req/sec |
-| vs Axum | +64% быстрее |
+| HTTP-сервер (Router + hyper) | 50,243 req/sec |
+| vs Axum | 2.3x быстрее |
 | 100K запросов | 0 ошибок |
 
-## 12 примеров
+## Примеры
 
 | Пример | Что демонстрирует |
 |--------|-------------------|
 | `hello.u` | Строковая интерполяция, print |
 | `calc.u` | Функции, рекурсия, циклы |
-| `shapes.u` | Struct, enum, match, `::` мутация |
+| `shapes.u` | Struct, enum, match, мутация через `.` |
 | `todo_cli.u` | Sqlite, CLI-аргументы, `?` ошибки |
 | `workers.u` | Spawn, каналы, конкурентность |
 | `server.u` | HTTP-сервер, keep-alive |
 | `fault_tolerance.u` | Автоматический catch паник в spawn |
 | `race_check.u` | Безопасный счётчик через канал |
-| `spawn_safety.u` | Запрет `::` в spawn |
+| `spawn_safety.u` | Запрет `mut` в spawn |
 | `sitegen.u` | Статический сайт-генератор |
 | `objects.u` | Impl, trait, методы |
-| `server_router.u` | Router API, 35K req/sec |
+| `server_router.u` | Router API, 50K+ req/sec |
 
 ## Спецификация
 
-Полная спецификация: [spec/SPEC.md](spec/SPEC.md) (v1.1)
+Полная спецификация: [spec/SPEC.md](spec/SPEC.md) (v2.1)
 
 ## Лицензия
 

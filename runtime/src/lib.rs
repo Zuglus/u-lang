@@ -2,13 +2,14 @@
 //!
 //! Provides Sqlite, Args, concurrency (tokio), HTTP, and string extensions for U scripts.
 
-use std::collections::HashMap;
 use std::error::Error;
 
 // Re-export everything at crate root for `use u_runtime::*;`
+#[cfg(feature = "sqlite")]
 pub use db::{Db, Row, Sqlite};
 pub use args::{Args, ParsedArgs};
 pub use concurrency::{Channel, Chan};
+#[cfg(feature = "http")]
 pub use http::{HttpServer, HttpListener, HttpConn, Response, HttpResponse, HttpRequest, Router, URouter, serve};
 
 /// Extension trait: .int() on strings
@@ -30,8 +31,10 @@ impl StrExt for str {
 
 // ─── Sqlite ──────────────────────────────────────────────
 
+#[cfg(feature = "sqlite")]
 pub mod db {
     use super::*;
+    use std::collections::HashMap;
     use rusqlite::Connection;
 
     /// Unit struct — used as `Sqlite.open("path")` in U source
@@ -264,6 +267,62 @@ pub fn create_dir(path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(std::fs::create_dir_all(path)?)
 }
 
+/// Copy a single file
+pub fn copy_file(from: &str, to: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    std::fs::copy(from, to)?;
+    Ok(())
+}
+
+/// Copy a directory recursively
+pub fn copy_dir(from: &str, to: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn copy_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let dest = dst.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_recursive(&entry.path(), &dest)?;
+            } else {
+                std::fs::copy(entry.path(), &dest)?;
+            }
+        }
+        Ok(())
+    }
+    Ok(copy_recursive(std::path::Path::new(from), std::path::Path::new(to))?)
+}
+
+// ─── JSON ───────────────────────────────────────────────
+
+/// Parse JSON string into serde_json::Value (panics on invalid JSON)
+#[cfg(feature = "json")]
+pub fn parse_json(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("parse_json: {}", e))
+}
+
+/// Serialize serde_json::Value to JSON string
+#[cfg(feature = "json")]
+pub fn to_json(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+/// Extension trait: .len() on serde_json::Value
+#[cfg(feature = "json")]
+pub trait JsonLen {
+    fn len(&self) -> usize;
+}
+
+#[cfg(feature = "json")]
+impl JsonLen for serde_json::Value {
+    fn len(&self) -> usize {
+        match self {
+            serde_json::Value::Array(a) => a.len(),
+            serde_json::Value::Object(o) => o.len(),
+            serde_json::Value::String(s) => s.len(),
+            _ => 0,
+        }
+    }
+}
+
 /// Get file stem (name without extension): "about.md" → "about"
 pub fn path_stem(path: &str) -> String {
     std::path::Path::new(path)
@@ -338,6 +397,16 @@ pub fn trim(s: &str) -> String {
     s.trim().to_string()
 }
 
+/// Generate a range [0..n)
+pub fn range(n: i64) -> Vec<i64> {
+    (0..n).collect()
+}
+
+/// Check if path is a directory
+pub fn is_dir(path: &str) -> bool {
+    std::path::Path::new(path).is_dir()
+}
+
 /// Catch panics — wraps std::panic::catch_unwind
 pub fn catch<F: FnOnce()>(f: F) -> Result<(), String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
@@ -362,6 +431,7 @@ pub fn error(msg: &str) {
 
 // ─── HTTP (hyper) ─────────────────────────────────────────
 
+#[cfg(feature = "http")]
 pub mod http {
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
@@ -615,6 +685,7 @@ pub mod http {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "sqlite")]
     #[test]
     fn test_sqlite_open_exec_query() {
         let db = Sqlite.open(":memory:").unwrap();
@@ -626,6 +697,7 @@ mod tests {
         assert_eq!(rows[0].string("name"), "hello");
     }
 
+    #[cfg(feature = "sqlite")]
     #[test]
     fn test_dollar_param_conversion() {
         let db = Sqlite.open(":memory:").unwrap();
@@ -635,6 +707,7 @@ mod tests {
         assert_eq!(rows[0].string("v"), "test");
     }
 
+    #[cfg(feature = "sqlite")]
     #[test]
     fn test_exec1_int() {
         let db = Sqlite.open(":memory:").unwrap();

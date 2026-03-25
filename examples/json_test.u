@@ -1,0 +1,13 @@
+// parse
+data = parse_json(#"{"name": "Андрей", "age": 30, "items": [1, 2, 3]}"#)
+print(data.name)
+print(data.age)
+print(data.items.len())
+
+// to_json
+print(to_json(data))
+
+// copy
+write_file("test_copy_src.txt", "hello")
+copy_file("test_copy_src.txt", "test_copy_dst.txt")
+print(read_file("test_copy_dst.txt"))

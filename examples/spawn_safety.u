@@ -1,10 +1,10 @@
-// spawn_safety.u — компилятор запрещает :: в spawn
+// spawn_safety.u — компилятор запрещает mut в spawn
 //
 // ОШИБКА КОМПИЛЯЦИИ:
-// fn writer(::data)
-//     data::push(42)
+// fn writer(mut data)
+//     data.push(42)
 // end
-// spawn writer(items)   // ← error: cannot mutate external data from goroutine
+// spawn writer(items)   // ← error: cannot mutate external variable in spawn
 //
 // ПРАВИЛЬНО — через канал:
 

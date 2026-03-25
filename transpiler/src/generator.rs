@@ -106,7 +106,7 @@ fn stmt_needs_async(s: &Stmt) -> bool {
             || elifs.iter().any(|(c, b)| expr_needs_async(c) || stmts_need_async(b))
             || else_body.as_ref().map_or(false, |b| stmts_need_async(b)),
         Stmt::ForLoop { iter, body, .. } => expr_needs_async(iter) || stmts_need_async(body),
-        Stmt::Loop { body, .. } => stmts_need_async(body),
+        Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => stmts_need_async(body),
         Stmt::Match { expr, arms, .. } => expr_needs_async(expr) || arms.iter().any(|a| stmt_needs_async(&a.body)),
         _ => false,
     }
@@ -133,7 +133,7 @@ fn stmt_calls_async(s: &Stmt, af: &HashSet<String>) -> bool {
             || elifs.iter().any(|(c, b)| expr_calls_async(c, af) || stmts_call_any_async(b, af))
             || else_body.as_ref().map_or(false, |b| stmts_call_any_async(b, af)),
         Stmt::ForLoop { iter, body, .. } => expr_calls_async(iter, af) || stmts_call_any_async(body, af),
-        Stmt::Loop { body, .. } => stmts_call_any_async(body, af),
+        Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => stmts_call_any_async(body, af),
         Stmt::Match { expr, arms, .. } => expr_calls_async(expr, af) || arms.iter().any(|a| stmt_calls_async(&a.body, af)),
         _ => false,
     }
@@ -214,7 +214,7 @@ fn stmts_access_field_on(param: &str, stmts: &[Stmt]) -> Option<String> {
                     .or_else(|| else_body.as_ref().and_then(|b| stmts_access_field_on(param, b))),
             Stmt::ForLoop { iter, body, .. } =>
                 expr_accesses_field_on(param, iter).or_else(|| stmts_access_field_on(param, body)),
-            Stmt::Loop { body, .. } => stmts_access_field_on(param, body),
+            Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => stmts_access_field_on(param, body),
             Stmt::Match { expr, arms, .. } =>
                 expr_accesses_field_on(param, expr)
                     .or_else(|| arms.iter().find_map(|a| match &a.body {
@@ -293,6 +293,8 @@ fn stmt_has_qmark(s: &Stmt) -> bool {
             || elifs.iter().any(|(c, b)| expr_has_qmark(c) || uses_qmark(b))
             || else_body.as_ref().map_or(false, |b| uses_qmark(b)),
         Stmt::ForLoop { iter, body, .. } => expr_has_qmark(iter) || uses_qmark(body),
+        Stmt::WhileLoop { condition, body, .. } => expr_has_qmark(condition) || uses_qmark(body),
+        Stmt::Loop { body, .. } => uses_qmark(body),
         Stmt::Match { expr, arms, .. } => expr_has_qmark(expr) || arms.iter().any(|a| stmt_has_qmark(&a.body)),
         _ => false,
     }
@@ -316,7 +318,7 @@ fn has_return_value(stmts: &[Stmt]) -> bool {
         Stmt::If { body, elifs, else_body, .. } =>
             has_return_value(body) || elifs.iter().any(|(_, b)| has_return_value(b))
             || else_body.as_ref().map_or(false, |b| has_return_value(b)),
-        Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } => has_return_value(body),
+        Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => has_return_value(body),
         Stmt::Match { arms, .. } => arms.iter().any(|a| matches!(&a.body, Stmt::Return { value: Some(_), .. })),
         _ => false,
     })
@@ -361,6 +363,8 @@ fn stmt_offset(stmt: &Stmt) -> usize {
         | Stmt::Spawn { span, .. } | Stmt::Loop { span, .. }
         | Stmt::MemoryDecl { span, .. } | Stmt::UseDecl { span, .. }
         | Stmt::TraitDef { span, .. } | Stmt::ImplBlock { span, .. }
+        | Stmt::WhileLoop { span, .. } | Stmt::Break { span, .. }
+        | Stmt::Continue { span, .. }
         => span.start,
     }
 }
@@ -457,14 +461,15 @@ fn validate_stmt_spawn(stmt: &Stmt, ctx: &Ctx) -> Result<(), String> {
                 if let Some(params) = ctx.fn_params.get(name.as_str()) {
                     if let Some(p) = params.iter().find(|p| p.is_mut) {
                         return Err(format!(
-                            "error: cannot mutate external data from goroutine — '::' changes bytes in shared memory. Use a channel (.send) instead.\n  spawn {}(...) ← parameter '::{}' mutates shared data",
+                            "error: cannot mutate external variable in spawn — function '{}' has 'mut {}' parameter. Use a channel (.send) instead.",
                             name, p.name
                         ));
                     }
                 }
             }
         }
-        Stmt::FnDef { body, .. } | Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } => {
+        Stmt::FnDef { body, .. } | Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. }
+        | Stmt::WhileLoop { body, .. } => {
             for s in body { validate_stmt_spawn(s, ctx)?; }
         }
         Stmt::ImplBlock { methods, .. } => {
@@ -515,6 +520,12 @@ fn runtime_param_types(name: &str) -> Option<&'static [&'static str]> {
         "str_len" => Some(&["&str"]),
         "trim" => Some(&["&str"]),
         "path_stem" => Some(&["&str"]),
+        "copy_file" => Some(&["&str", "&str"]),
+        "copy_dir" => Some(&["&str", "&str"]),
+        "is_dir" => Some(&["&str"]),
+        "range" => Some(&["i64"]),
+        "parse_json" => Some(&["&str"]),
+        "to_json" => Some(&["&ref"]),
         _ => None,
     }
 }
@@ -645,15 +656,19 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         }
         Stmt::If { condition, body, elifs, else_body, .. } => {
             out.push_str("if "); gen_expr(condition, out, ctx); out.push_str(" {\n");
-            gen_stmts(body, out, indent + 1, ctx, result_fn, declared);
+            let mut branch_decl = declared.clone();
+            gen_stmts(body, out, indent + 1, ctx, result_fn, &mut branch_decl);
             out.push_str(&pad); out.push('}');
             for (cond, block) in elifs {
                 out.push_str(" else if "); gen_expr(cond, out, ctx); out.push_str(" {\n");
-                gen_stmts(block, out, indent + 1, ctx, result_fn, declared);
+                let mut elif_decl = declared.clone();
+                gen_stmts(block, out, indent + 1, ctx, result_fn, &mut elif_decl);
                 out.push_str(&pad); out.push('}');
             }
             if let Some(eb) = else_body {
-                out.push_str(" else {\n"); gen_stmts(eb, out, indent + 1, ctx, result_fn, declared);
+                out.push_str(" else {\n");
+                let mut else_decl = declared.clone();
+                gen_stmts(eb, out, indent + 1, ctx, result_fn, &mut else_decl);
                 out.push_str(&pad); out.push('}');
             }
             out.push('\n');
@@ -707,6 +722,17 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             out.push_str("loop {\n");
             gen_stmts(body, out, indent + 1, ctx, result_fn, declared);
             out.push_str(&pad); out.push_str("}\n");
+        }
+        Stmt::WhileLoop { condition, body, .. } => {
+            out.push_str("while "); gen_expr(condition, out, ctx); out.push_str(" {\n");
+            gen_stmts(body, out, indent + 1, ctx, result_fn, declared);
+            out.push_str(&pad); out.push_str("}\n");
+        }
+        Stmt::Break { .. } => {
+            out.push_str("break;\n");
+        }
+        Stmt::Continue { .. } => {
+            out.push_str("continue;\n");
         }
         Stmt::Spawn { expr, .. } => {
             // Unwrap lambda — spawn fn() expr is equivalent to spawn expr
@@ -838,7 +864,7 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             } else if let Some(param_types) = runtime_param_types(name) {
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { out.push_str(", "); }
-                    if param_types.get(i) == Some(&"&str") {
+                    if param_types.get(i).map(|t| t.starts_with('&')).unwrap_or(false) {
                         out.push('&');
                     }
                     gen_expr(arg, out, ctx);
@@ -1089,10 +1115,10 @@ mod tests {
 
     #[test]
     fn test_spawn_mut_param_rejected() {
-        let src = "fn writer(::data)\n    print(data)\nend\nspawn writer(x)";
+        let src = "fn writer(mut data)\n    print(data)\nend\nspawn writer(x)";
         let result = generate(&parser::parse(src).unwrap(), src, "test.u", &[]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot mutate external data"));
+        assert!(result.unwrap_err().contains("cannot mutate external variable in spawn"));
     }
 
     #[test]
@@ -1130,7 +1156,7 @@ mod tests {
 
     #[test]
     fn test_struct_mut_assign() {
-        let code = gen("struct P\n    x: Int\nend\n\np = P(x: 1)\np::x = 2").unwrap();
+        let code = gen("struct P\n    x: Int\nend\n\np = P(x: 1)\np.x = 2").unwrap();
         assert!(code.contains("p.x = 2"));
         assert!(!code.contains("borrow_mut()"));
     }
