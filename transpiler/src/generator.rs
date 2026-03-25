@@ -388,16 +388,18 @@ pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[S
     out.push_str("#![allow(unused_mut, unused_variables, dead_code, unused_imports)]\n");
     out.push_str("use u_runtime::*;\n");
 
-    // Emit mod declarations for .rs modules
+    // Emit mod declarations for all modules (.rs and .u-transpiled)
     for m in rs_modules {
         out.push_str("mod "); out.push_str(m); out.push_str(";\n");
     }
 
-    // Emit use statements for local .rs module imports
+    // Emit use statements for module imports
     for stmt in &program.statements {
         if let Stmt::UseDecl { path, imports, .. } = stmt {
-            if rs_modules.iter().any(|m| m == path) {
-                out.push_str("use "); out.push_str(path); out.push_str("::");
+            // Flat module name: utils.strings → utils_strings, math → math
+            let flat_name = path.replace('.', "_");
+            if rs_modules.iter().any(|m| m == path || m == &flat_name) {
+                out.push_str("use "); out.push_str(&flat_name); out.push_str("::");
                 if imports.len() == 1 {
                     out.push_str(&imports[0]);
                 } else {
@@ -444,6 +446,28 @@ pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[S
         }
     }
     out.push_str("    Ok(())\n}\n");
+    Ok(out)
+}
+
+/// Generate a module file (no main, just declarations)
+pub fn generate_module(program: &Program, source: &str, filename: &str) -> Result<String, String> {
+    let ctx = Ctx::new(program, source, filename);
+
+    let mut out = String::new();
+    out.push_str("#![allow(unused_mut, unused_variables, dead_code, unused_imports)]\n");
+    out.push_str("use u_runtime::*;\n\n");
+
+    for stmt in &program.statements {
+        match stmt {
+            Stmt::StructDef { .. } | Stmt::TypeDef { .. } | Stmt::FnDef { .. }
+            | Stmt::TraitDef { .. } | Stmt::ImplBlock { .. } => {
+                let mut decl = HashSet::new();
+                gen_stmt(stmt, &mut out, 0, &ctx, false, &mut decl);
+                out.push('\n');
+            }
+            _ => {}
+        }
+    }
     Ok(out)
 }
 
@@ -551,18 +575,23 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
     }
     out.push_str(&pad);
     match stmt {
-        Stmt::StructDef { name, fields, .. } => {
-            out.push_str("#[derive(Debug, Clone)]\nstruct ");
+        Stmt::StructDef { name, fields, is_pub, .. } => {
+            out.push_str("#[derive(Debug, Clone)]\n");
+            if *is_pub { out.push_str(&pad); out.push_str("pub "); } else { out.push_str(&pad); }
+            out.push_str("struct ");
             out.push_str(name);
             out.push_str(" {\n");
             for f in fields {
                 out.push_str(&pad); out.push_str("    ");
+                if *is_pub { out.push_str("pub "); }
                 out.push_str(&f.name); out.push_str(": "); out.push_str(map_type(&f.type_name)); out.push_str(",\n");
             }
             out.push_str(&pad); out.push_str("}\n");
         }
-        Stmt::TypeDef { name, variants, .. } => {
-            out.push_str("#[derive(Debug, Clone)]\nenum ");
+        Stmt::TypeDef { name, variants, is_pub, .. } => {
+            out.push_str("#[derive(Debug, Clone)]\n");
+            if *is_pub { out.push_str(&pad); out.push_str("pub "); } else { out.push_str(&pad); }
+            out.push_str("enum ");
             out.push_str(name); out.push_str(" {\n");
             for v in variants {
                 out.push_str(&pad); out.push_str("    "); out.push_str(&v.name); out.push('(');
@@ -592,7 +621,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         Stmt::ExprStmt { expr, .. } => {
             gen_expr(expr, out, ctx); out.push_str(";\n");
         }
-        Stmt::FnDef { name, params, return_type, body, .. } => {
+        Stmt::FnDef { name, params, return_type, body, is_pub, .. } => {
             let fn_uses_q = uses_qmark(body);
             let has_ret = has_return_value(body);
             // Save struct_vars snapshot for function scope
@@ -613,6 +642,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                     struct_params.push(p.name.clone());
                 }
             }
+            if *is_pub { out.push_str("pub "); }
             if ctx.async_fns.contains(name) { out.push_str("async "); }
             out.push_str("fn "); out.push_str(name); out.push('(');
             for (i, p) in params.iter().enumerate() {

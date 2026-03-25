@@ -1,0 +1,20 @@
+// main.u — главный файл проекта с модулями
+use math: add, subtract, multiply
+use helpers: greet, farewell
+use utils.strings: shout
+
+greet("мир")
+
+x = add(10, 20)
+print("10 + 20 = $x")
+
+y = subtract(100, 42)
+print("100 - 42 = $y")
+
+z = multiply(6, 7)
+print("6 * 7 = $z")
+
+msg = shout("Работает")
+print(msg)
+
+farewell("мир")

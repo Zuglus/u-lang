@@ -178,23 +178,40 @@ fn compute_hash(path: &PathBuf, source: &str) -> anyhow::Result<String> {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
 
-    // Also hash .rs files in same directory
+    // Also hash .rs and .u files in same directory (and subdirs for .u modules)
     let dir = path.parent().unwrap_or(Path::new("."));
+    hash_dir_files(dir, &mut hasher);
+
+    // Hash subdirectories (for submodules like utils/strings.u)
     if let Ok(entries) = std::fs::read_dir(dir) {
-        let mut rs_files: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rs"))
-            .collect();
-        rs_files.sort();
-        for f in rs_files {
-            if let Ok(content) = std::fs::read_to_string(&f) {
-                content.hash(&mut hasher);
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                hash_dir_files(&p, &mut hasher);
             }
         }
     }
 
     Ok(format!("{:016x}", hasher.finish()))
+}
+
+fn hash_dir_files(dir: &Path, hasher: &mut DefaultHasher) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                let ext = p.extension().and_then(|e| e.to_str());
+                ext == Some("rs") || ext == Some("u")
+            })
+            .collect();
+        files.sort();
+        for f in files {
+            if let Ok(content) = std::fs::read_to_string(&f) {
+                content.hash(hasher);
+            }
+        }
+    }
 }
 
 fn cache_dir_for(stem: &str) -> PathBuf {
@@ -288,17 +305,30 @@ fn check_ident(name: &str, deps: &mut Deps) {
 
 // ─── Compilation ────────────────────────────────────────
 
+/// Transpiled .u module: module name → generated Rust code
+struct UModule {
+    name: String,
+    rust_code: String,
+}
+
 fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     let source = std::fs::read_to_string(path)?;
     let ast = u::parser::parse(&source)?;
     let u_filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("input.u");
     let u_dir = path.parent().unwrap_or(Path::new("."));
     let rs_modules = find_rs_modules(u_dir);
-    let rust_code = u::generator::generate(&ast, &source, u_filename, &rs_modules)
+
+    // Discover and transpile .u modules
+    let u_modules = discover_u_modules(&ast, u_dir, path)?;
+    let all_module_names: Vec<String> = rs_modules.iter().cloned()
+        .chain(u_modules.iter().map(|m| m.name.clone()))
+        .collect();
+
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let deps = analyze_deps(&ast);
-    build_rust_project(stem, &rust_code, u_dir, &rs_modules, &deps, u_filename, Some(&source))
+    build_rust_project(stem, &rust_code, u_dir, &rs_modules, &u_modules, &deps, u_filename, Some(&source))
 }
 
 fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBuf> {
@@ -308,7 +338,12 @@ fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBu
     let u_dir = path.parent().unwrap_or(Path::new("."));
     let rs_modules = find_rs_modules(u_dir);
 
-    let rust_code = u::generator::generate(&ast, &source, u_filename, &rs_modules)
+    let u_modules = discover_u_modules(&ast, u_dir, path)?;
+    let all_module_names: Vec<String> = rs_modules.iter().cloned()
+        .chain(u_modules.iter().map(|m| m.name.clone()))
+        .collect();
+
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Replace #[tokio::main] and everything after with test runner
@@ -324,7 +359,42 @@ fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBu
     let stem = format!("{}_test",
         path.file_stem().and_then(|s| s.to_str()).unwrap_or("test"));
     let deps = analyze_deps(&ast);
-    build_rust_project(&stem, &rust_code, u_dir, &rs_modules, &deps, u_filename, Some(&source))
+    build_rust_project(&stem, &rust_code, u_dir, &rs_modules, &u_modules, &deps, u_filename, Some(&source))
+}
+
+/// Find .u modules referenced by `use` statements and transpile them
+fn discover_u_modules(ast: &u::ast::Program, u_dir: &Path, main_path: &Path) -> anyhow::Result<Vec<UModule>> {
+    let mut modules = Vec::new();
+    let main_stem = main_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+    for stmt in &ast.statements {
+        if let u::ast::Stmt::UseDecl { path, .. } = stmt {
+            // Skip std.* imports
+            if path.starts_with("std.") || path == "std" { continue; }
+
+            // Convert dot-path to file path: utils.strings → utils/strings.u
+            let file_rel = path.replace('.', "/");
+            let u_file = u_dir.join(format!("{}.u", file_rel));
+
+            if u_file.exists() {
+                let mod_name = path.replace('.', "_");
+                // Avoid importing self
+                if mod_name == main_stem { continue; }
+                // Avoid duplicates
+                if modules.iter().any(|m: &UModule| m.name == mod_name) { continue; }
+
+                let mod_source = std::fs::read_to_string(&u_file)?;
+                let mod_ast = u::parser::parse(&mod_source)?;
+                let mod_filename = u_file.file_name().and_then(|s| s.to_str()).unwrap_or("module.u");
+
+                let rust_code = u::generator::generate_module(&mod_ast, &mod_source, mod_filename)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+                modules.push(UModule { name: mod_name, rust_code });
+            }
+        }
+    }
+    Ok(modules)
 }
 
 fn find_rs_modules(dir: &Path) -> Vec<String> {
@@ -380,7 +450,7 @@ fn generate_test_runner(test_names: &[String]) -> String {
 
 fn build_rust_project(
     stem: &str, rust_code: &str, u_dir: &Path, rs_modules: &[String],
-    deps: &Deps, u_filename: &str, u_source: Option<&str>,
+    u_modules: &[UModule], deps: &Deps, u_filename: &str, u_source: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
     let project_dir = cache_dir_for(stem);
     let src_dir = project_dir.join("src");
@@ -430,6 +500,11 @@ tokio = {{ version = "1", features = ["full"] }}
             u_dir.join(format!("{}.rs", module)),
             src_dir.join(format!("{}.rs", module)),
         )?;
+    }
+
+    // Write transpiled .u module files
+    for m in u_modules {
+        std::fs::write(src_dir.join(format!("{}.rs", m.name)), &m.rust_code)?;
     }
 
     // Write generated source

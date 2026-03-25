@@ -219,9 +219,9 @@ fn classify_block(trimmed: &str) -> Block {
         Block::Loop
     } else if trimmed.starts_with("match ") {
         Block::Match
-    } else if trimmed.starts_with("struct ") {
+    } else if trimmed.starts_with("struct ") || trimmed.starts_with("pub struct ") {
         Block::Struct
-    } else if trimmed.starts_with("enum ") {
+    } else if trimmed.starts_with("enum ") || trimmed.starts_with("pub enum ") {
         Block::Enum
     } else if trimmed.starts_with("impl ") {
         Block::Impl
@@ -242,8 +242,8 @@ fn opens_block(trimmed: &str) -> bool {
         || trimmed.starts_with("if ")
         || trimmed == "loop"
         || trimmed.starts_with("match ")
-        || trimmed.starts_with("struct ")
-        || trimmed.starts_with("enum ")
+        || trimmed.starts_with("struct ") || trimmed.starts_with("pub struct ")
+        || trimmed.starts_with("enum ") || trimmed.starts_with("pub enum ")
         || trimmed.starts_with("impl ")
         || trimmed.starts_with("trait ")
 }
@@ -254,8 +254,8 @@ fn is_mid_block(trimmed: &str) -> bool {
 
 fn is_definition(trimmed: &str) -> bool {
     is_fn_start(trimmed)
-        || trimmed.starts_with("struct ")
-        || trimmed.starts_with("enum ")
+        || trimmed.starts_with("struct ") || trimmed.starts_with("pub struct ")
+        || trimmed.starts_with("enum ") || trimmed.starts_with("pub enum ")
         || trimmed.starts_with("impl ")
         || trimmed.starts_with("trait ")
 }

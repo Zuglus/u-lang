@@ -3,10 +3,13 @@
 program = { SOI ~ NEWLINE* ~ (statement ~ (NEWLINE+ | &EOI))* ~ EOI }
 
 // Statements
-statement = { memory_stmt | use_stmt | struct_def | type_def | trait_def | impl_block | test_fn_def | fn_def | for_loop | while_loop | loop_stmt | if_stmt | match_stmt
+statement = { memory_stmt | use_stmt | pub_struct_def | struct_def | pub_type_def | type_def | trait_def | impl_block | test_fn_def | pub_fn_def | fn_def | for_loop | while_loop | loop_stmt | if_stmt | match_stmt
             | spawn_stmt | return_stmt | break_stmt | continue_stmt | mutation_stmt | assignment | expr_stmt }
 
-test_fn_def = { test_kw ~ fn_def }
+test_fn_def    = { test_kw ~ fn_def }
+pub_fn_def     = { pub_kw ~ fn_def }
+pub_struct_def = { pub_kw ~ struct_def }
+pub_type_def   = { pub_kw ~ type_def }
 
 memory_stmt = { memory_kw ~ "(" ~ identifier ~ ")" }
 use_stmt    = { use_kw ~ use_path ~ ":" ~ use_items }
@@ -146,6 +149,7 @@ mut_kw      = @{ "mut" ~ !(LETTER | ASCII_DIGIT | "_") }
 break_kw    = @{ "break" ~ !(LETTER | ASCII_DIGIT | "_") }
 continue_kw = @{ "continue" ~ !(LETTER | ASCII_DIGIT | "_") }
 while_kw    = @{ "while" ~ !(LETTER | ASCII_DIGIT | "_") }
+pub_kw      = @{ "pub" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Implicit rules
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }

@@ -1,0 +1,5 @@
+// utils/strings.u — строковые утилиты
+
+pub fn shout(text: String) -> String
+    return "$text!!!"
+end

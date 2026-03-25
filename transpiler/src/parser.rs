@@ -19,7 +19,7 @@ fn is_kw(rule: Rule) -> bool {
         | Rule::struct_kw | Rule::enum_kw | Rule::match_kw
         | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw
         | Rule::trait_kw | Rule::impl_kw | Rule::test_kw | Rule::mut_kw
-        | Rule::break_kw | Rule::continue_kw | Rule::while_kw)
+        | Rule::break_kw | Rule::continue_kw | Rule::while_kw | Rule::pub_kw)
 }
 
 fn meaningful(pairs: pest::iterators::Pairs<Rule>) -> impl Iterator<Item = pest::iterators::Pair<Rule>> + '_ {
@@ -98,14 +98,23 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                 }
             }
             let body = build_block(block_pair.unwrap())?;
-            Ok(Stmt::FnDef { name, params, return_type, body, is_test: false, span: s })
+            Ok(Stmt::FnDef { name, params, return_type, body, is_test: false, is_pub: false, span: s })
         }
         Rule::test_fn_def => {
             let s = span(inner.as_span());
             let fn_pair = inner.into_inner().find(|p| p.as_rule() == Rule::fn_def).unwrap();
             match build_stmt_inner(fn_pair)? {
                 Stmt::FnDef { name, params, return_type, body, .. } =>
-                    Ok(Stmt::FnDef { name, params, return_type, body, is_test: true, span: s }),
+                    Ok(Stmt::FnDef { name, params, return_type, body, is_test: true, is_pub: false, span: s }),
+                _ => unreachable!(),
+            }
+        }
+        Rule::pub_fn_def => {
+            let s = span(inner.as_span());
+            let fn_pair = inner.into_inner().find(|p| p.as_rule() == Rule::fn_def).unwrap();
+            match build_stmt_inner(fn_pair)? {
+                Stmt::FnDef { name, params, return_type, body, .. } =>
+                    Ok(Stmt::FnDef { name, params, return_type, body, is_test: false, is_pub: true, span: s }),
                 _ => unreachable!(),
             }
         }
@@ -151,7 +160,16 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                 let mut fi = tf.into_inner();
                 TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
             }).collect();
-            Ok(Stmt::StructDef { name, fields, span: s })
+            Ok(Stmt::StructDef { name, fields, is_pub: false, span: s })
+        }
+        Rule::pub_struct_def => {
+            let s = span(inner.as_span());
+            let struct_pair = inner.into_inner().find(|p| p.as_rule() == Rule::struct_def).unwrap();
+            match build_stmt_inner(struct_pair)? {
+                Stmt::StructDef { name, fields, .. } =>
+                    Ok(Stmt::StructDef { name, fields, is_pub: true, span: s }),
+                _ => unreachable!(),
+            }
         }
         Rule::type_def => {
             let s = span(inner.as_span());
@@ -166,7 +184,16 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                 }).collect();
                 Variant { name: vname, fields }
             }).collect();
-            Ok(Stmt::TypeDef { name, variants, span: s })
+            Ok(Stmt::TypeDef { name, variants, is_pub: false, span: s })
+        }
+        Rule::pub_type_def => {
+            let s = span(inner.as_span());
+            let type_pair = inner.into_inner().find(|p| p.as_rule() == Rule::type_def).unwrap();
+            match build_stmt_inner(type_pair)? {
+                Stmt::TypeDef { name, variants, .. } =>
+                    Ok(Stmt::TypeDef { name, variants, is_pub: true, span: s }),
+                _ => unreachable!(),
+            }
         }
         Rule::match_stmt => {
             let s = span(inner.as_span());
