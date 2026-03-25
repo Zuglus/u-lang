@@ -1,0 +1,90 @@
+{
+  "header": {
+    "ru": "Связаться с нами",
+    "en": "Get in Touch"
+  },
+  "subtitle": {
+    "ru": "Конфиденциальная консультация по вашему делу",
+    "en": "Confidential consultation for your case"
+  },
+  "emergency": {
+    "title": {
+      "ru": "Быстрая связь",
+      "en": "Priority Contact"
+    },
+    "description": {
+      "ru": "Прямая линия для связи",
+      "en": "Direct line for contact"
+    }
+  },
+  "addressTitle": {
+    "ru": "Офис в Москве",
+    "en": "Moscow Office"
+  },
+  "address": {
+    "ru": "г. Москва, Проспект Мира, 27",
+    "en": "Moscow, Prospekt Mira, 27"
+  },
+  "addressDescription": {
+    "ru": "Личные встречи по предварительной записи",
+    "en": "In-person meetings by appointment"
+  },
+  "email": {
+    "ru": "Электронная почта",
+    "en": "Email"
+  },
+  "emailDescription": {
+    "ru": "Для письменных обращений",
+    "en": "For written inquiries"
+  },
+  "messengers": {
+    "title": {
+      "ru": "Каналы связи",
+      "en": "Contact Channels"
+    },
+    "description": {
+      "ru": "Быстрая связь в любое время",
+      "en": "Quick contact anytime"
+    }
+  },
+  "telegram": {
+    "ru": "Telegram",
+    "en": "Telegram"
+  },
+  "whatsapp": {
+    "ru": "WhatsApp",
+    "en": "WhatsApp"
+  },
+  "imo": {
+    "ru": "Imo",
+    "en": "Imo"
+  },
+  "signal": {
+    "ru": "Signal",
+    "en": "Signal"
+  },
+  "confidentiality": {
+    "title": {
+      "ru": "Гарантия конфиденциальности",
+      "en": "Confidentiality Guarantee"
+    },
+    "description": {
+      "ru": "Все обращения строго конфиденциальны. Согласно ФЗ № 152 «О персональных данных» при обращении к нам вы автоматически даете согласие на обработку персональных данных исключительно в рамках оказания услуг.",
+      "en": "All inquiries are strictly confidential. In accordance with Federal Law No. 152 \"On Personal Data\", by contacting us you automatically consent to the processing of personal data exclusively for service provision."
+    }
+  },
+  "responseTime": {
+    "phone": {
+      "ru": "Связь",
+      "en": "Contact"
+    },
+    "email": {
+      "ru": "Связь",
+      "en": "Contact"
+    },
+    "messengers": {
+      "ru": "Связь",
+      "en": "Contact"
+    }
+  }
+}

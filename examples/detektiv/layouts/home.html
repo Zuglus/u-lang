@@ -1,0 +1,80 @@
+<!-- HERO -->
+<section class="relative min-h-screen flex flex-col items-center justify-center text-center px-6 overflow-hidden">
+  <div class="absolute inset-0 bg-gradient-header"></div>
+  <div class="relative z-10 max-w-3xl mx-auto">
+    <h1 class="font-display font-bold text-white mb-6 leading-tight text-display-md md:text-display-lg" style="text-shadow:0 4px 24px rgba(0,0,0,0.35);">{{ hero.title.ru }}</h1>
+    <p class="text-lg md:text-xl mb-8 text-white/80">{{ hero.subtitle.ru }}</p>
+    <div class="flex flex-wrap items-center justify-center gap-4 mb-20">
+      {% for badge in hero.badges %}<span class="px-4 py-2 bg-white/10 backdrop-blur-sm rounded-full border border-white/20 text-white/90 text-sm">{{ badge.ru }}</span>{% endfor %}
+    </div>
+    <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+      <a href="/contact/" class="inline-flex items-center px-8 py-4 bg-primary-500 hover:bg-primary-400 text-white font-semibold rounded-xl text-lg transition-colors">{{ hero.cta.ru }}</a>
+      <a href="tel:+79150010025" class="text-lg sm:text-2xl font-bold text-white hover:text-primary-200 transition-colors">+7 (915) 001-00-25</a>
+    </div>
+  </div>
+</section>
+
+<!-- SERVICES -->
+<section class="py-20 bg-white">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center mb-12">
+      <h2 class="font-display text-heading-lg font-bold text-secondary-900 mb-4">{{ services.title.ru }}</h2>
+      <p class="text-secondary-600 max-w-2xl mx-auto">{{ services.subtitle.ru }}</p>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      {% for item in services.items %}
+      <div class="group bg-secondary-50 rounded-2xl p-6 border border-secondary-100 hover:shadow-lg hover:-translate-y-1 transition-all duration-300">
+        <h3 class="font-display text-xl font-bold text-secondary-900 mb-3">{{ item.title.ru }}</h3>
+        <p class="text-secondary-600 text-sm leading-relaxed">{{ item.text.ru }}</p>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="text-center mt-20">
+      <a href="/price/" class="inline-flex items-center text-primary-600 font-semibold hover:text-primary-700 transition-colors">{{ services.allLink.ru }} &rarr;</a>
+    </div>
+  </div>
+</section>
+
+<!-- TRUST -->
+<section class="py-20 bg-gradient-to-br from-primary-600 to-primary-700 text-white">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center mb-12">
+      <h2 class="font-display text-heading-lg font-bold mb-4">{{ trust.title.ru }}</h2>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      {% for item in trust.items %}
+      <div class="text-center">
+        <div class="text-display-sm font-bold mb-2">{{ item.value }}</div>
+        <div class="text-primary-100">{{ item.label.ru }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<!-- LATEST CASES -->
+<section class="py-20 bg-secondary-50">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center mb-12">
+      <h2 class="font-display text-heading-lg font-bold text-secondary-900 mb-4">{{ cases.title.ru }}</h2>
+      <p class="text-secondary-600 max-w-2xl mx-auto">{{ cases.subtitle.ru }}</p>
+    </div>
+    {{ latest_articles }}
+    <div class="text-center mt-20">
+      <a href="/stati/" class="inline-flex items-center text-primary-600 font-semibold hover:text-primary-700 transition-colors">{{ cases.allLink.ru }} &rarr;</a>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="py-20 bg-white">
+  <div class="max-w-4xl mx-auto px-6 text-center">
+    <h2 class="font-display text-heading-lg font-bold text-secondary-900 mb-4">{{ cta.title.ru }}</h2>
+    <p class="text-secondary-600 text-lg mb-8 max-w-2xl mx-auto">{{ cta.text.ru }}</p>
+    <div class="flex flex-wrap justify-center gap-4 mb-8">
+      <a href="https://t.me/+79150010025" class="flex flex-col items-center p-4 bg-secondary-50 rounded-xl hover:bg-secondary-100 transition-colors min-w-[80px]"><span class="text-2xl mb-1">&#9993;</span><span class="text-xs text-secondary-700">Telegram</span></a>
+      <a href="https://wa.me/79150010025" class="flex flex-col items-center p-4 bg-secondary-50 rounded-xl hover:bg-secondary-100 transition-colors min-w-[80px]"><span class="text-2xl mb-1">&#128172;</span><span class="text-xs text-secondary-700">WhatsApp</span></a>
+    </div>
+    <a href="/contact/" class="inline-flex items-center px-8 py-4 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-xl text-lg transition-colors">{{ cta.button.ru }}</a>
+  </div>
+</section>

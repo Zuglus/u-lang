@@ -371,19 +371,24 @@ pub fn find_from(s: &str, substr: &str, from: i64) -> i64 {
     s[from..].find(substr).map(|i| (i + from) as i64).unwrap_or(-1)
 }
 
-/// Get substring from byte position to end
+/// Get substring from byte position to end (safe: adjusts to char boundaries)
 pub fn slice_from(s: &str, from: i64) -> String {
-    let from = from.max(0) as usize;
+    let mut from = from.max(0) as usize;
     if from >= s.len() { return String::new(); }
+    while from < s.len() && !s.is_char_boundary(from) { from += 1; }
     s[from..].to_string()
 }
 
-/// Get substring from byte position to byte position
+/// Get substring from byte position to byte position (safe: adjusts to char boundaries)
 pub fn slice_range(s: &str, from: i64, to: i64) -> String {
-    let from = from.max(0) as usize;
-    let to = to.max(0) as usize;
+    let mut from = from.max(0) as usize;
+    let mut to = to.max(0) as usize;
     if from >= s.len() || from >= to { return String::new(); }
-    let to = to.min(s.len());
+    to = to.min(s.len());
+    // Adjust to valid UTF-8 char boundaries
+    while from < s.len() && !s.is_char_boundary(from) { from += 1; }
+    while to > from && !s.is_char_boundary(to) { to -= 1; }
+    if from >= to { return String::new(); }
     s[from..to].to_string()
 }
 

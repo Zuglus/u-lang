@@ -1,0 +1,30 @@
+<!-- HEADER -->
+<section class="relative overflow-hidden text-white pt-40 pb-12 bg-gradient-header">
+  <div class="relative z-10 max-w-3xl mx-auto px-6 text-center">
+    <h1 class="font-display text-display-sm md:text-display-md font-bold text-white mb-4">{{ header.title.ru }}</h1>
+    <p class="text-white/70 text-lg">{{ header.subtitle.ru }}</p>
+  </div>
+</section>
+
+<!-- GUARANTEES -->
+<section class="py-16 bg-white">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      {% for item in guarantees %}
+      <div class="bg-secondary-50 rounded-2xl p-8 border border-secondary-100 text-center">
+        <h3 class="font-display text-xl font-bold text-secondary-900 mb-3">{{ item.title.ru }}</h3>
+        <p class="text-secondary-600 text-sm leading-relaxed">{{ item.text.ru }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<!-- REFUND -->
+<section class="py-16 bg-secondary-50">
+  <div class="max-w-3xl mx-auto px-6 text-center">
+    <h2 class="font-display text-heading-lg font-bold text-secondary-900 mb-4">{{ refund.title.ru }}</h2>
+    <p class="text-secondary-600 text-lg mb-8">{{ refund.text.ru }}</p>
+    <a href="/contact/" class="inline-flex items-center px-8 py-4 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-xl text-lg transition-colors">Связаться с нами</a>
+  </div>
+</section>

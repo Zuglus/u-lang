@@ -1,0 +1,248 @@
+// generate.u — генератор сайта детективного агентства на U
+use ujinja: render, get, get_raw, arr_at
+
+// --- Markdown → HTML (упрощённый) ---
+
+fn md_to_html(text: String) -> String
+    lines = text.split_lines()
+    html = ""
+    for line in lines
+        if line.starts_with("### ")
+            inner = line.slice_from(4)
+            html = "$(html)<h3>$(inner)</h3>\n"
+        elif line.starts_with("## ")
+            inner = line.slice_from(3)
+            html = "$(html)<h2>$(inner)</h2>\n"
+        elif line.starts_with("# ")
+            inner = line.slice_from(2)
+            html = "$(html)<h1>$(inner)</h1>\n"
+        elif line.len() > 0
+            html = "$(html)<p>$(line)</p>\n"
+        end
+    end
+    return html
+end
+
+// --- Front matter парсер ---
+// Возвращает JSON: {"title": "...", "slug": "...", "short": "...", "category": "..."}
+
+fn parse_front_matter(content: String) -> String
+    // Найти первый ---
+    start = content.find("---")
+    if start == -1
+        return ""
+    end
+    // Найти второй ---
+    end_fm = content.find_from("---", start + 3)
+    if end_fm == -1
+        return ""
+    end
+    fm = content.slice(start + 3, end_fm)
+    lines = fm.split_lines()
+    title = ""
+    slug = ""
+    short = ""
+    category = ""
+    for line in lines
+        if line.starts_with("title: ")
+            val = line.slice_from(7)
+            // Убрать кавычки
+            if val.starts_with(#"""#)
+                title = val.slice(1, val.len() - 1)
+            else
+                title = "$val"
+            end
+        elif line.starts_with("slug: ")
+            val = line.slice_from(6)
+            if val.starts_with(#"""#)
+                slug = val.slice(1, val.len() - 1)
+            else
+                slug = "$val"
+            end
+        elif line.starts_with("short: ")
+            val = line.slice_from(7)
+            if val.starts_with(#"""#)
+                short = val.slice(1, val.len() - 1)
+            else
+                short = "$val"
+            end
+        elif line.starts_with("category: ")
+            val = line.slice_from(10)
+            if val.starts_with(#"""#)
+                category = val.slice(1, val.len() - 1)
+            else
+                category = "$val"
+            end
+        end
+    end
+    return #"{"title": "$title", "slug": "$slug", "short": "$short", "category": "$category"}"#
+end
+
+fn get_body(content: String) -> String
+    start = content.find("---")
+    if start == -1
+        return "$content"
+    end
+    end_fm = content.find_from("---", start + 3)
+    if end_fm == -1
+        return "$content"
+    end
+    return trim(content.slice_from(end_fm + 3))
+end
+
+// --- Обёртка страницы в base шаблон ---
+
+fn wrap_page(body: String, title: String, description: String) -> String
+    base = read_file("layouts/base.html")?
+    ctx = #"{"content": "placeholder", "title": "$title", "description": "$description"}"#
+    // Рендерим base (заменяет title, description)
+    page = render(base, ctx, "ru")
+    // Вставляем body вместо placeholder
+    page = page.replace("placeholder", body)
+    return page
+end
+
+// --- Сборка карточки статьи ---
+
+fn article_card(title: String, short: String, href: String) -> String
+    return #"<article class="group bg-white border border-secondary-100 rounded-2xl p-6 transition-all duration-300 hover:shadow-lg hover:-translate-y-1"><a href="$href" class="block"><div class="flex items-center gap-2 mb-3"><span class="px-2.5 py-1 bg-primary-100 text-primary-700 rounded-full text-xs font-medium">Дело</span></div><h3 class="font-display text-lg font-bold text-secondary-900 mb-3 group-hover:text-primary-700 transition-colors line-clamp-2">$title</h3><p class="text-secondary-600 text-sm line-clamp-3">$short</p></a></article>"#
+end
+
+// =====================================================
+// MAIN
+// =====================================================
+
+// Рабочая директория — examples/detektiv/
+create_dir("dist")?
+
+// --- Читаем данные ---
+home_data = read_file("data/pages/home.json")?
+price_data = read_file("data/pages/price.json")?
+about_data = read_file("data/pages/about.json")?
+guarantee_data = read_file("data/pages/guarantee.json")?
+contact_data = read_file("data/pages/contact.json")?
+
+count = 0
+
+// --- HOME PAGE ---
+home_tmpl = read_file("layouts/home.html")?
+// Сначала собираем карточки последних 3 статей
+latest_cards = ""
+idx = 0
+files = list_dir("content/stati")?
+for file in files
+    if file.ends_with(".ru.md")
+        if file != "_index.ru.md"
+            if idx < 3
+                raw = read_file("content/stati/$(file)")?
+                fm = parse_front_matter(raw)
+                t = get(fm, "title")
+                s = get(fm, "short")
+                sl = get(fm, "slug")
+                if s.len() > 120
+                    s = s.slice(0, 120)
+                    s = "$(s)..."
+                end
+                card = article_card(t, s, "/stati/$(sl)/")
+                latest_cards = "$(latest_cards)$(card)\n"
+                idx = idx + 1
+            end
+        end
+    end
+end
+// Вставляем карточки в home_data контекст
+articles_grid = #"<div class="grid grid-cols-1 md:grid-cols-3 gap-6">$latest_cards</div>"#
+// Рендерим home body
+home_body = render(home_tmpl, home_data, "ru")
+home_body = home_body.replace("{{ latest_articles }}", articles_grid)
+page = wrap_page(home_body, "Главная", "Детективное агентство в Москве с 2010 года")?
+create_dir("dist")?
+write_file("dist/index.html", page)?
+count = count + 1
+
+// --- PRICE PAGE ---
+price_tmpl = read_file("layouts/price.html")?
+price_body = render(price_tmpl, price_data, "ru")
+page = wrap_page(price_body, "Услуги и цены", "Услуги детективного агентства")?
+create_dir("dist/price")?
+write_file("dist/price/index.html", page)?
+count = count + 1
+
+// --- ABOUT PAGE ---
+about_tmpl = read_file("layouts/about.html")?
+about_body = render(about_tmpl, about_data, "ru")
+page = wrap_page(about_body, "О нас", "О детективном агентстве")?
+create_dir("dist/about")?
+write_file("dist/about/index.html", page)?
+count = count + 1
+
+// --- GUARANTEE PAGE ---
+guarantee_tmpl = read_file("layouts/guarantee.html")?
+guarantee_body = render(guarantee_tmpl, guarantee_data, "ru")
+page = wrap_page(guarantee_body, "Гарантии", "Гарантии качества детективных услуг")?
+create_dir("dist/guarantee")?
+write_file("dist/guarantee/index.html", page)?
+count = count + 1
+
+// --- CONTACT PAGE ---
+contact_tmpl = read_file("layouts/contact.html")?
+contact_body = render(contact_tmpl, contact_data, "ru")
+page = wrap_page(contact_body, "Контакты", "Связаться с детективным агентством")?
+create_dir("dist/contact")?
+write_file("dist/contact/index.html", page)?
+count = count + 1
+
+// --- ARTICLES ---
+article_tmpl = read_file("layouts/article.html")?
+all_cards = ""
+
+files2 = list_dir("content/stati")?
+for file in files2
+    if file.ends_with(".ru.md")
+        if file != "_index.ru.md"
+            raw = read_file("content/stati/$(file)")?
+            fm = parse_front_matter(raw)
+            title = get(fm, "title")
+            slug = get(fm, "slug")
+            short = get(fm, "short")
+            category = get(fm, "category")
+
+            body_md = get_body(raw)
+            body_html = md_to_html(body_md)
+
+            // Контекст для статьи
+            art_ctx = #"{"title": "$title", "body": "ART_BODY_PLACEHOLDER"}"#
+            art_body = render(article_tmpl, art_ctx, "ru")
+            art_body = art_body.replace("ART_BODY_PLACEHOLDER", body_html)
+
+            page = wrap_page(art_body, title, short)?
+            dir = "dist/stati/$(slug)"
+            create_dir(dir)?
+            write_file("$(dir)/index.html", page)?
+
+            // Карточка для списка
+            if short.len() > 120
+                short = short.slice(0, 120)
+                short = "$(short)..."
+            end
+            card = article_card(title, short, "/stati/$(slug)/")
+            all_cards = "$(all_cards)$(card)\n"
+            count = count + 1
+        end
+    end
+end
+
+// --- ARTICLE LIST PAGE ---
+list_tmpl = read_file("layouts/list.html")?
+list_ctx = #"{"cards": "CARDS_PLACEHOLDER"}"#
+list_body = render(list_tmpl, list_ctx, "ru")
+list_body = list_body.replace("CARDS_PLACEHOLDER", all_cards)
+page = wrap_page(list_body, "Статьи", "Реальные истории из практики")?
+create_dir("dist/stati")?
+write_file("dist/stati/index.html", page)?
+count = count + 1
+
+// --- STATIC FILES ---
+copy_dir("static", "dist")?
+
+print("Собрано: $(count) страниц -> dist/")

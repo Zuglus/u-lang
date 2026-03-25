@@ -1,0 +1,38 @@
+{
+  "cardTitle": {
+    "ru": "Помощник детектива",
+    "en": "Detective Assistant"
+  },
+  "cardText": {
+    "ru": "Подработка на разовые задания",
+    "en": "Freelance work for one-time assignments"
+  },
+  "portfolioTitle": {
+    "ru": "В резюме укажите следующие данные:",
+    "en": "In your resume, include the following information:"
+  },
+  "portfolioList": {
+    "ru": [
+      "Ваше фото",
+      "Полная биография о себе",
+      "Контактные данные",
+      "Информация о близких родственниках",
+      "Перечень своих качеств и возможностей"
+    ],
+    "en": [
+      "Your photo",
+      "Complete biography about yourself",
+      "Contact details",
+      "Information about close relatives",
+      "List of your qualities and capabilities"
+    ]
+  },
+  "portfolioLink": {
+    "ru": "Резюме отправляйте на e-mail: <strong>detectivegroznyi@gmail.com</strong> или сообщением в мессенджер.",
+    "en": "Send your resume to e-mail: <strong>detectivegroznyi@gmail.com</strong> or via messengers."
+  },
+  "portfolioAlert": {
+    "ru": "<strong>Важно!</strong> Звонить не надо, при заинтересованности в вашей кандидатуре мы сами с вами свяжемся.",
+    "en": "<strong>Important!</strong> No need to call, if we are interested in your candidacy, we will contact you."
+  }
+}

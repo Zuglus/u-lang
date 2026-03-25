@@ -1,0 +1,106 @@
+{
+  "hero": {
+    "title": {
+      "ru": "О нас",
+      "en": "About Us"
+    },
+    "subtitle": {
+      "ru": "Профессиональные детективные услуги с 2010 года",
+      "en": "Professional detective services since 2010"
+    }
+  },
+  "timeline": {
+    "title": {
+      "ru": "Наша история",
+      "en": "Our History"
+    },
+    "items": {
+      "ru": [
+        {
+          "year": "2010",
+          "title": "Основание агентства",
+          "description": "Детективное агентство создано Грозным Эдуардом Николаевичем, офицером в отставке — старшим оперуполномоченным по особо важным делам. Ветераном боевых действий, награжденным государственными наградами."
+        },
+        {
+          "year": "2010-2026",
+          "title": "16 лет детективной деятельности",
+          "description": "Более полутора десятков лет успешной детективной работы, решения сложных семейных и бизнес задач, не считая огромный опыт работы в органах."
+        }
+      ],
+      "en": [
+        {
+          "year": "2010",
+          "title": "Agency Founded",
+          "description": "The detective agency was founded by Eduard Nikolaevich Grozny, a retired officer — senior operative for especially important cases. Combat veteran decorated with state awards."
+        },
+        {
+          "year": "2010-2026",
+          "title": "16 Years Detective Work",
+          "description": "Over fifteen years of successful detective work, solving complex family and business tasks, not counting extensive law enforcement experience."
+        }
+      ]
+    }
+  },
+  "expertise": {
+    "title": {
+      "ru": "Наши преимущества",
+      "en": "Our Expertise"
+    },
+    "items": {
+      "ru": [
+        {
+          "icon": "user",
+          "title": "Профессиональная команда",
+          "description": "Квалифицированные специалисты с высшим образованием и многолетним опытом"
+        },
+        {
+          "icon": "bolt",
+          "title": "Оперативная работа",
+          "description": "Работаем оперативно и результативно. Приступаем к выполнению задач немедленно, без проволочек"
+        },
+        {
+          "icon": "file-badge",
+          "title": "Официальная лицензия",
+          "description": "Работаем исключительно в правовом поле с полным пакетом документов"
+        },
+        {
+          "icon": "handshake",
+          "title": "Честный подход",
+          "description": "Учитываем и обговариваем все риски с заказчиком заранее"
+        }
+      ],
+      "en": [
+        {
+          "icon": "user",
+          "title": "Professional Team",
+          "description": "Qualified specialists with higher education and years of experience"
+        },
+        {
+          "icon": "bolt",
+          "title": "Immediate Action",
+          "description": "We work promptly and efficiently. We begin task execution immediately, without delays"
+        },
+        {
+          "icon": "file-badge",
+          "title": "Official License",
+          "description": "We work exclusively within the legal framework with full documentation"
+        },
+        {
+          "icon": "handshake",
+          "title": "Honest Approach",
+          "description": "We consider and discuss all risks with the client in advance"
+        }
+      ]
+    }
+  },
+  "warning": {
+    "title": {
+      "ru": "Остерегайтесь мошенников",
+      "en": "Beware of Fraudsters"
+    },
+    "description": {
+      "ru": "Рынок детективных услуг насыщен непрофессиональными кадрами: \"гражданскими-стажерами\" без опыта, получившими лицензию после трехмесячного обучения, или мошенниками без лицензий, гарантирующими 100% результат.",
+      "en": "The detective services market is flooded with unprofessional staff: 'civil interns' without experience who obtained licenses after three-month training, or fraudsters without licenses guaranteeing 100% results."
+    }
+  }
+}

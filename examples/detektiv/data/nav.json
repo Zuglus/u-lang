@@ -1,0 +1,18 @@
+{
+  "ru": [
+    { "name": "главная",      "href": "/" },
+    { "name": "услуги",       "href": "/price" },
+    { "name": "о нас",        "href": "/onas" },
+    { "name": "гарантии",     "href": "/garantii" },
+    { "name": "статьи",       "href": "/stati" },
+    { "name": "контакты",     "href": "/kontakty" }
+  ],
+  "en": [
+    { "name": "main",      "href": "/en" },
+    { "name": "services",  "href": "/en/price" },
+    { "name": "about",     "href": "/en/about" },
+    { "name": "guarantee", "href": "/en/guarantee" },
+    { "name": "blog",      "href": "/en/blog" },
+    { "name": "contacts",  "href": "/en/contact" }
+  ]
+}
