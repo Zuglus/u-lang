@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -309,6 +310,7 @@ fn check_ident(name: &str, deps: &mut Deps) {
 struct UModule {
     name: String,
     rust_code: String,
+    fn_params: HashMap<String, Vec<u::ast::FnParam>>,
 }
 
 fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
@@ -324,7 +326,11 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
         .chain(u_modules.iter().map(|m| m.name.clone()))
         .collect();
 
-    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names)
+    // Collect module fn params for cross-module type info
+    let mut ext_fn_params = HashMap::new();
+    for m in &u_modules { ext_fn_params.extend(m.fn_params.clone()); }
+
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let deps = analyze_deps(&ast);
@@ -343,7 +349,10 @@ fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBu
         .chain(u_modules.iter().map(|m| m.name.clone()))
         .collect();
 
-    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names)
+    let mut ext_fn_params = HashMap::new();
+    for m in &u_modules { ext_fn_params.extend(m.fn_params.clone()); }
+
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Replace #[tokio::main] and everything after with test runner
@@ -390,7 +399,15 @@ fn discover_u_modules(ast: &u::ast::Program, u_dir: &Path, main_path: &Path) -> 
                 let rust_code = u::generator::generate_module(&mod_ast, &mod_source, mod_filename)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-                modules.push(UModule { name: mod_name, rust_code });
+                // Extract pub fn params for cross-module type info
+                let mut mod_fn_params = HashMap::new();
+                for s in &mod_ast.statements {
+                    if let u::ast::Stmt::FnDef { name, params, is_pub: true, .. } = s {
+                        mod_fn_params.insert(name.clone(), params.clone());
+                    }
+                }
+
+                modules.push(UModule { name: mod_name, rust_code, fn_params: mod_fn_params });
             }
         }
     }

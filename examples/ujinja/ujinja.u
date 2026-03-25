@@ -1,0 +1,302 @@
+// ujinja.u — шаблонизатор для U Language
+
+// Найти закрывающую скобку с учётом вложенности
+// open/close: "{","}" или "[","]"
+fn find_close(data: String, start: Int, open: String, close: String) -> Int
+    depth = 1
+    pos = start + 1
+    loop
+        no = data.find_from(open, pos)
+        nc = data.find_from(close, pos)
+        if nc == -1
+            return data.len()
+        end
+        if no != -1
+            if no < nc
+                depth = depth + 1
+                pos = no + 1
+                continue
+            end
+        end
+        depth = depth - 1
+        if depth == 0
+            return nc + 1
+        end
+        pos = nc + 1
+    end
+end
+
+// Получить значение JSON-ключа (строка без кавычек, объект/массив целиком)
+fn json_get_raw(data: String, key: String) -> String
+    needle = #""$key""#
+    pos = data.find(needle)
+    if pos == -1
+        return ""
+    end
+    colon = data.find_from(":", pos + needle.len())
+    if colon == -1
+        return ""
+    end
+    // Пропуск пробелов после двоеточия (ASCII — безопасно)
+    i = colon + 1
+    while i < data.len()
+        if data.find_from(" ", i) == i
+            i = i + 1
+        else
+            break
+        end
+    end
+    if i >= data.len()
+        return ""
+    end
+    // Строковое значение — между кавычками
+    if data.find_from(#"""#, i) == i
+        end_q = data.find_from(#"""#, i + 1)
+        if end_q == -1
+            return ""
+        end
+        return data.slice(i + 1, end_q)
+    end
+    // Объект — найти закрывающую }
+    if data.find_from("{", i) == i
+        end_pos = find_close(data, i, "{", "}")
+        return data.slice(i, end_pos)
+    end
+    // Массив — найти закрывающую ]
+    if data.find_from("[", i) == i
+        end_pos = find_close(data, i, "[", "]")
+        return data.slice(i, end_pos)
+    end
+    // Примитив (число, bool, null) — до запятой или скобки
+    end_pos = data.len()
+    next_c = data.find_from(",", i)
+    if next_c != -1
+        if next_c < end_pos
+            end_pos = next_c
+        end
+    end
+    next_b = data.find_from("}", i)
+    if next_b != -1
+        if next_b < end_pos
+            end_pos = next_b
+        end
+    end
+    next_a = data.find_from("]", i)
+    if next_a != -1
+        if next_a < end_pos
+            end_pos = next_a
+        end
+    end
+    return trim(data.slice(i, end_pos))
+end
+
+// Разрешить путь "hero.title.ru" по вложенным JSON-объектам
+fn resolve_path(data: String, path: String) -> String
+    current = "$data"
+    rest = "$path"
+    loop
+        dot = rest.find(".")
+        if dot == -1
+            return json_get_raw(current, rest)
+        end
+        key = rest.slice(0, dot)
+        current = json_get_raw(current, key)
+        if current.len() == 0
+            return ""
+        end
+        rest = rest.slice_from(dot + 1)
+    end
+end
+
+// Получить элемент JSON-массива по индексу (0-based)
+fn json_array_at(arr: String, idx: Int) -> String
+    pos = 1
+    count = 0
+    loop
+        // Пропуск пробелов
+        while pos < arr.len()
+            if arr.find_from(" ", pos) == pos
+                pos = pos + 1
+            else
+                break
+            end
+        end
+        if pos >= arr.len()
+            return ""
+        end
+        // Конец массива
+        if arr.find_from("]", pos) == pos
+            return ""
+        end
+        // Определить конец текущего элемента
+        elem_end = pos
+        if arr.find_from("{", pos) == pos
+            elem_end = find_close(arr, pos, "{", "}")
+        elif arr.find_from("[", pos) == pos
+            elem_end = find_close(arr, pos, "[", "]")
+        elif arr.find_from(#"""#, pos) == pos
+            end_q = arr.find_from(#"""#, pos + 1)
+            if end_q == -1
+                elem_end = arr.len()
+            else
+                elem_end = end_q + 1
+            end
+        else
+            nc = arr.find_from(",", pos)
+            nb = arr.find_from("]", pos)
+            elem_end = arr.len()
+            if nc != -1
+                if nc < elem_end
+                    elem_end = nc
+                end
+            end
+            if nb != -1
+                if nb < elem_end
+                    elem_end = nb
+                end
+            end
+        end
+        // Нашли нужный элемент
+        if count == idx
+            return arr.slice(pos, elem_end)
+        end
+        // Перейти к следующему
+        pos = elem_end
+        while pos < arr.len()
+            if arr.find_from(",", pos) == pos
+                pos = pos + 1
+            elif arr.find_from(" ", pos) == pos
+                pos = pos + 1
+            else
+                break
+            end
+        end
+        count = count + 1
+    end
+end
+
+// Вычислить условие вида: key == "value"
+fn eval_condition(data: String, cond: String) -> Bool
+    eq_pos = cond.find(" == ")
+    if eq_pos == -1
+        return false
+    end
+    key = cond.slice(0, eq_pos)
+    raw_val = cond.slice_from(eq_pos + 4)
+    expected = ""
+    if raw_val.starts_with(#"""#)
+        expected = raw_val.slice(1, raw_val.len() - 1)
+    else
+        expected = "$raw_val"
+    end
+    actual = resolve_path(data, key)
+    return actual == expected
+end
+
+// Рекурсивный рендеринг секции шаблона
+fn render_section(tmpl: String, data: String, lang: String) -> String
+    result = ""
+    rest = "$tmpl"
+    loop
+        pos_var = rest.find("{{")
+        pos_tag = rest.find("{%")
+
+        // Ничего не найдено — вернуть остаток
+        if pos_var == -1
+            if pos_tag == -1
+                return "$(result)$(rest)"
+            end
+        end
+
+        // Что обработать первым: переменную {{ }} или тег {% %}
+        handle_var = false
+        if pos_var != -1
+            if pos_tag == -1
+                handle_var = true
+            elif pos_var < pos_tag
+                handle_var = true
+            end
+        end
+
+        if handle_var
+            // Подстановка переменной {{ key }}
+            result = "$(result)$(rest.slice(0, pos_var))"
+            close = rest.find_from("}}", pos_var + 2)
+            raw_key = rest.slice(pos_var + 2, close)
+            key = trim(raw_key)
+            value = resolve_path(data, key)
+            result = "$(result)$(value)"
+            rest = rest.slice_from(close + 2)
+        else
+            // Тег {% ... %}
+            result = "$(result)$(rest.slice(0, pos_tag))"
+            close_tag = rest.find_from("%}", pos_tag + 2)
+            tag = trim(rest.slice(pos_tag + 2, close_tag))
+            rest = rest.slice_from(close_tag + 2)
+
+            if tag.starts_with("for ")
+                // for item in list_key
+                for_body = tag.slice_from(4)
+                in_pos = for_body.find(" in ")
+                var_name = for_body.slice(0, in_pos)
+                list_key = for_body.slice_from(in_pos + 4)
+
+                // Найти {% endfor %}
+                endfor_pos = rest.find("{% endfor %}")
+                body = rest.slice(0, endfor_pos)
+                rest = rest.slice_from(endfor_pos + 12)
+
+                // Получить массив и итерировать
+                arr = json_get_raw(data, list_key)
+                idx = 0
+                loop
+                    item = json_array_at(arr, idx)
+                    if item.len() == 0
+                        break
+                    end
+                    ctx = #"{"$var_name": $item}"#
+                    result = "$(result)$(render_section(body, ctx, lang))"
+                    idx = idx + 1
+                end
+
+            elif tag.starts_with("if ")
+                // if key == "value"
+                cond_str = tag.slice_from(3)
+
+                endif_pos = rest.find("{% endif %}")
+                if endif_pos == -1
+                    return "$(result)$(rest)"
+                end
+
+                else_pos = rest.find("{% else %}")
+                if_body = ""
+                else_body = ""
+
+                if else_pos != -1
+                    if else_pos < endif_pos
+                        if_body = rest.slice(0, else_pos)
+                        else_body = rest.slice(else_pos + 10, endif_pos)
+                    else
+                        if_body = rest.slice(0, endif_pos)
+                    end
+                else
+                    if_body = rest.slice(0, endif_pos)
+                end
+
+                if eval_condition(data, cond_str)
+                    result = "$(result)$(render_section(if_body, data, lang))"
+                else
+                    if else_body.len() > 0
+                        result = "$(result)$(render_section(else_body, data, lang))"
+                    end
+                end
+                rest = rest.slice_from(endif_pos + 11)
+            end
+        end
+    end
+end
+
+// Точка входа
+pub fn render(template: String, data: String, lang: String) -> String
+    return render_section(template, data, lang)
+end

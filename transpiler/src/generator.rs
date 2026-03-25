@@ -380,8 +380,11 @@ fn infer_method_ret(body: &[Stmt], target: &str, _structs: &HashSet<String>) -> 
     "i64".to_string()
 }
 
-pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[String]) -> Result<String, String> {
-    let ctx = Ctx::new(program, source, filename);
+pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[String], ext_fn_params: &HashMap<String, Vec<FnParam>>) -> Result<String, String> {
+    let mut ctx = Ctx::new(program, source, filename);
+    for (name, params) in ext_fn_params {
+        ctx.fn_params.entry(name.clone()).or_insert_with(|| params.clone());
+    }
     validate_spawn_safety(program, &ctx)?;
 
     let mut out = String::new();
@@ -1159,7 +1162,7 @@ mod tests {
     use crate::parser;
 
     fn gen(src: &str) -> Result<String, String> {
-        generate(&parser::parse(src).unwrap(), src, "test.u", &[])
+        generate(&parser::parse(src).unwrap(), src, "test.u", &[], &HashMap::new())
     }
 
     #[test]
@@ -1199,7 +1202,7 @@ mod tests {
     #[test]
     fn test_spawn_mut_param_rejected() {
         let src = "fn writer(mut data)\n    print(data)\nend\nspawn writer(x)";
-        let result = generate(&parser::parse(src).unwrap(), src, "test.u", &[]);
+        let result = generate(&parser::parse(src).unwrap(), src, "test.u", &[], &HashMap::new());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot mutate external variable in spawn"));
     }
