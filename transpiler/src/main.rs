@@ -369,6 +369,16 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     let source = std::fs::read_to_string(path)?;
     let ast = u::parser::parse(&source)?;
     
+    // Type checking
+    if let Err(errors) = u::type_checker::check_program(&ast) {
+        let mut messages = Vec::new();
+        for e in errors {
+            let line = source[..e.span.start].lines().count();
+            messages.push(format!("{}:{}: {}", path.display(), line, e.message));
+        }
+        return Err(anyhow!("Ошибки типизации:\n{}", messages.join("\n")));
+    }
+    
     // Cycle detection - reject cyclic struct references
     if let Err(e) = u::cycle_detector::detect_cycles(&ast) {
         let line = source[..e.span.start].lines().count();

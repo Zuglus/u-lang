@@ -4,3 +4,4 @@ pub mod error_mapper;
 pub mod formatter;
 pub mod generator;
 pub mod parser;
+pub mod type_checker;
