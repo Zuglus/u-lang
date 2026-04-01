@@ -1,30 +1,20 @@
-// objects.u — struct, impl, trait, методы через точку
+// objects.u — методы через impl
 
 struct Counter
     value: Int
 end
 
 impl Counter
-    fn new()
+    fn new() -> Counter
         return Counter(value: 0)
     end
-
+    
     fn get(self) -> Int
         return self.value
     end
-
+    
     fn increment(mut self)
         self.value = self.value + 1
-    end
-end
-
-trait Describable
-    fn describe(self) -> String
-end
-
-impl Describable for Counter
-    fn describe(self) -> String
-        return "Counter($(self.value))"
     end
 end
 
@@ -35,5 +25,4 @@ c.increment()
 c.increment()
 c.increment()
 
-print("After: $(c.get())")
-print(c.describe())
+print("Result: $(c.get())")

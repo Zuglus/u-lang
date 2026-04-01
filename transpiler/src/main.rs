@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use clap::Parser;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -142,7 +143,58 @@ fn find_u_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
 
 fn parse_file(path: &PathBuf) -> anyhow::Result<u::ast::Program> {
     let source = std::fs::read_to_string(path)?;
-    u::parser::parse(&source)
+    let mut program = u::parser::parse(&source)?;
+    
+    // Load modules from use statements
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    load_modules(&mut program, base_dir)?;
+    
+    Ok(program)
+}
+
+fn load_modules(program: &mut u::ast::Program, base_dir: &Path) -> anyhow::Result<()> {
+    let mut loaded = Vec::new();
+    
+    for stmt in &program.statements {
+        if let u::ast::Stmt::UseDecl { path: module, imports: items, .. } = stmt {
+            // Skip std modules
+            if module.starts_with("std.") || module == "std" {
+                continue;
+            }
+            
+            // Try to load module file: module.u or module/module.u
+            let module_file = base_dir.join(format!("{}.u", module));
+            if module_file.exists() {
+                let module_source = std::fs::read_to_string(&module_file)?;
+                let module_ast = u::parser::parse(&module_source)?;
+                
+                // Extract requested items (functions, structs, etc.)
+                for item in items {
+                    if let Some(stmt) = find_item(&module_ast, item) {
+                        loaded.push(stmt);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Prepend loaded modules to program
+    loaded.extend(program.statements.drain(..));
+    program.statements = loaded;
+    
+    Ok(())
+}
+
+fn find_item(ast: &u::ast::Program, name: &str) -> Option<u::ast::Stmt> {
+    for stmt in &ast.statements {
+        match stmt {
+            u::ast::Stmt::FnDef { name: n, .. } if n == name => return Some(stmt.clone()),
+            u::ast::Stmt::StructDef { name: n, .. } if n == name => return Some(stmt.clone()),
+            u::ast::Stmt::TypeDef { name: n, .. } if n == name => return Some(stmt.clone()),
+            _ => {}
+        }
+    }
+    None
 }
 
 // ─── Caching ────────────────────────────────────────────
@@ -316,12 +368,25 @@ struct UModule {
 fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     let source = std::fs::read_to_string(path)?;
     let ast = u::parser::parse(&source)?;
+    
+    // Cycle detection - reject cyclic struct references
+    if let Err(e) = u::cycle_detector::detect_cycles(&ast) {
+        let line = source[..e.span.start].lines().count();
+        return Err(anyhow!(
+            "{}:{}: {}\n  = help: Use std.linked for doubly-linked lists or store ID instead of reference",
+            path.display(), line, e.message
+        ));
+    }
+    
     let u_filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("input.u");
     let u_dir = path.parent().unwrap_or(Path::new("."));
     let rs_modules = find_rs_modules(u_dir);
 
     // Discover and transpile .u modules
     let u_modules = discover_u_modules(&ast, u_dir, path)?;
+    
+    // Cycle detection for modules - disabled (modules may have complex structures)
+    
     let all_module_names: Vec<String> = rs_modules.iter().cloned()
         .chain(u_modules.iter().map(|m| m.name.clone()))
         .collect();
@@ -331,7 +396,7 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     for m in &u_modules { ext_fn_params.extend(m.fn_params.clone()); }
 
     let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| anyhow!("{}", e))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let deps = analyze_deps(&ast);
     build_rust_project(stem, &rust_code, u_dir, &rs_modules, &u_modules, &deps, u_filename, Some(&source))
@@ -340,6 +405,16 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
 fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBuf> {
     let source = std::fs::read_to_string(path)?;
     let ast = u::parser::parse(&source)?;
+    
+    // Cycle detection - reject cyclic struct references
+    if let Err(e) = u::cycle_detector::detect_cycles(&ast) {
+        let line = source[..e.span.start].lines().count();
+        return Err(anyhow!(
+            "{}:{}: {}\n  = help: Use std.linked for doubly-linked lists or store ID instead of reference",
+            path.display(), line, e.message
+        ));
+    }
+    
     let u_filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("input.u");
     let u_dir = path.parent().unwrap_or(Path::new("."));
     let rs_modules = find_rs_modules(u_dir);
@@ -353,7 +428,7 @@ fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBu
     for m in &u_modules { ext_fn_params.extend(m.fn_params.clone()); }
 
     let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| anyhow!("{}", e))?;
 
     // Replace #[tokio::main] and everything after with test runner
     let rust_code = fixup_assertions(&rust_code);

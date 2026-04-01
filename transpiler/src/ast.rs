@@ -33,6 +33,14 @@ pub enum MatchPattern {
     Variant { name: String, bindings: Vec<String> },
     StringLit(String),
     Wildcard,
+    List(ListPattern),
+}
+
+#[derive(Debug, Clone)]
+pub enum ListPattern {
+    Empty,
+    Single(String),           // [x]
+    Cons(String, String),     // [head, ..tail]
 }
 
 #[derive(Debug, Clone)]

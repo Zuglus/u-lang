@@ -1,32 +1,18 @@
-// calc.u — вычисления на U
+// calc.u — чистые функции
 
-fn abs(x)
+fn abs(x: Int) -> Int
     if x < 0
         return 0 - x
     end
     return x
 end
 
-fn factorial(n)
+fn factorial(n: Int) -> Int
     if n < 2
         return 1
     end
     return n * factorial(n - 1)
 end
 
-fn max(a, b)
-    if a > b
-        return a
-    end
-    return b
-end
-
-print("=== Калькулятор на U ===")
 print("abs(-42) = $(abs(-42))")
 print("10! = $(factorial(10))")
-print("max(17, 5) = $(max(17, 5))")
-
-print("=== Таблица квадратов ===")
-for n in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    print("  $(n) * $(n) = $(n * n)")
-end

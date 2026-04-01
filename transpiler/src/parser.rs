@@ -327,11 +327,22 @@ fn build_match_pattern(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Matc
     match inner.as_rule() {
         Rule::variant_pattern => {
             let mut vi = inner.into_inner();
-            let name = vi.next().unwrap().as_str().to_string();
-            let bindings = vi.next()
-                .map(|b| b.into_inner().map(|i| i.as_str().to_string()).collect())
-                .unwrap_or_default();
-            Ok(MatchPattern::Variant { name, bindings })
+            let first = vi.next().unwrap();
+            match first.as_rule() {
+                Rule::none_literal => {
+                    Ok(MatchPattern::Variant { name: "None".to_string(), bindings: vec![] })
+                }
+                Rule::none_cap_pattern => {
+                    Ok(MatchPattern::Variant { name: "None".to_string(), bindings: vec![] })
+                }
+                _ => {
+                    let name = first.as_str().to_string();
+                    let bindings = vi.next()
+                        .map(|b| b.into_inner().map(|i| i.as_str().to_string()).collect())
+                        .unwrap_or_default();
+                    Ok(MatchPattern::Variant { name, bindings })
+                }
+            }
         }
         Rule::string_literal => {
             // Extract plain text from string literal parts
@@ -344,6 +355,23 @@ fn build_match_pattern(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Matc
             Ok(MatchPattern::StringLit(text))
         }
         Rule::match_wildcard => Ok(MatchPattern::Wildcard),
+        Rule::list_pattern => {
+            let inner_list = inner.into_inner().next().unwrap();
+            match inner_list.as_rule() {
+                Rule::list_empty => Ok(MatchPattern::List(ListPattern::Empty)),
+                Rule::list_single => {
+                    let binding = inner_list.into_inner().next().unwrap().as_str().to_string();
+                    Ok(MatchPattern::List(ListPattern::Single(binding)))
+                }
+                Rule::list_cons => {
+                    let mut parts = inner_list.into_inner();
+                    let head = parts.next().unwrap().as_str().to_string();
+                    let tail = parts.next().unwrap().as_str().to_string();
+                    Ok(MatchPattern::List(ListPattern::Cons(head, tail)))
+                }
+                _ => unreachable!("unexpected list pattern: {:?}", inner_list.as_rule()),
+            }
+        }
         _ => unreachable!("unexpected match pattern: {:?}", inner.as_rule()),
     }
 }

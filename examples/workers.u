@@ -1,23 +1,31 @@
-// workers.u — горутины и каналы
+// workers.u — каналы с явным завершением
 
 fn worker(id: Int, ch: Channel)
-    loop
+    limit = 10  // максимум 10 задач
+    count = 0
+    
+    while count < limit
         msg = ch.recv()
         if msg == "stop"
-            print("Worker $id: stopped")
+            print("Worker $id: done")
             return
         end
         print("Worker $id: $msg")
+        count = count + 1
     end
+    
+    print("Worker $id: limit reached")
 end
 
 ch = Channel.new()
 spawn worker(1, ch)
 spawn worker(2, ch)
+
 ch.send("task A")
 ch.send("task B")
 ch.send("task C")
 ch.send("stop")
 ch.send("stop")
+
 sleep(100)
 print("Done")

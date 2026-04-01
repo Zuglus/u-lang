@@ -29,6 +29,16 @@ impl StrExt for str {
     }
 }
 
+/// Parse string to i64, return Option
+pub fn str_to_int(s: &str) -> Option<i64> {
+    s.parse().ok()
+}
+
+/// Parse string to f64, return Option
+pub fn str_to_float(s: &str) -> Option<f64> {
+    s.parse().ok()
+}
+
 // ─── Sqlite ──────────────────────────────────────────────
 
 #[cfg(feature = "sqlite")]
@@ -218,6 +228,14 @@ pub mod concurrency {
         pub async fn recv(&self) -> String {
             self.rx.lock().await.recv().await.unwrap_or_default()
         }
+
+        pub async fn recv_timeout(&self, ms: i64) -> Option<String> {
+            let timeout = tokio::time::Duration::from_millis(ms as u64);
+            match tokio::time::timeout(timeout, self.rx.lock().await.recv()).await {
+                Ok(Some(msg)) => Some(msg),
+                _ => None,
+            }
+        }
     }
 }
 
@@ -357,6 +375,11 @@ pub fn replace(s: &str, from: &str, to: &str) -> String {
 /// Split string into lines
 pub fn split_lines(s: &str) -> Vec<String> {
     s.lines().map(|l| l.to_string()).collect()
+}
+
+/// Split string by delimiter
+pub fn split(s: &str, delim: &str) -> Vec<String> {
+    s.split(delim).map(|p| p.to_string()).collect()
 }
 
 /// Find substring, return byte position or -1

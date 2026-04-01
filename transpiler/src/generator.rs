@@ -524,7 +524,7 @@ fn is_async_function(name: &str) -> bool {
 }
 
 fn is_async_method(method: &str) -> bool {
-    matches!(method, "recv" | "accept" | "listen" | "respond" | "path")
+    matches!(method, "recv" | "recv_timeout" | "accept" | "listen" | "respond" | "path")
 }
 
 fn runtime_param_types(name: &str) -> Option<&'static [&'static str]> {
@@ -708,24 +708,78 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         }
         Stmt::Match { expr, arms, .. } => {
             let has_string_pat = arms.iter().any(|a| matches!(&a.pattern, MatchPattern::StringLit(_)));
-            out.push_str("match "); gen_expr(expr, out, ctx);
-            if has_string_pat { out.push_str(".as_str()"); }
-            out.push_str(" {\n");
-            for arm in arms {
-                out.push_str(&pad); out.push_str("    ");
-                match &arm.pattern {
-                    MatchPattern::Variant { name, bindings } => {
-                        if let Some(en) = ctx.variant_to_enum.get(name) { out.push_str(en); out.push_str("::"); }
-                        out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push_str(")");
+            let has_list_pat = arms.iter().any(|a| matches!(&a.pattern, MatchPattern::List(_)));
+
+            if has_list_pat {
+                // Generate if-else chain for list patterns
+                let temp_var = format!("_match_list_{}", out.len());
+                out.push_str("let "); out.push_str(&temp_var); out.push_str(" = "); gen_expr(expr, out, ctx); out.push_str(";\n");
+
+                for (i, arm) in arms.iter().enumerate() {
+                    out.push_str(&pad);
+                    let is_first = i == 0;
+                    let prefix = if is_first { "if" } else { " else if" };
+
+                    match &arm.pattern {
+                        MatchPattern::List(ListPattern::Empty) => {
+                            out.push_str(prefix); out.push_str(" "); out.push_str(&temp_var); out.push_str(".is_empty()");
+                            out.push_str(" {\n");
+                        }
+                        MatchPattern::List(ListPattern::Single(x)) => {
+                            out.push_str(prefix); out.push_str(" "); out.push_str(&temp_var); out.push_str(".len() == 1");
+                            out.push_str(" {\n");
+                            out.push_str(&pad); out.push_str("    ");
+                            out.push_str("let "); out.push_str(x); out.push_str(" = "); out.push_str(&temp_var); out.push_str("[0];\n");
+                        }
+                        MatchPattern::List(ListPattern::Cons(head, tail)) => {
+                            out.push_str(prefix); out.push_str(" !"); out.push_str(&temp_var); out.push_str(".is_empty()");
+                            out.push_str(" {\n");
+                            out.push_str(&pad); out.push_str("    ");
+                            out.push_str("let "); out.push_str(head); out.push_str(" = "); out.push_str(&temp_var); out.push_str("[0];\n");
+                            out.push_str(&pad); out.push_str("    ");
+                            out.push_str("let "); out.push_str(tail); out.push_str(" = &"); out.push_str(&temp_var); out.push_str("[1..];\n");
+                        }
+                        MatchPattern::Wildcard => {
+                            out.push_str(" else"); out.push_str(" {\n");
+                        }
+                        _ => {
+                            out.push_str(prefix); out.push_str(" true {\n");
+                        }
                     }
-                    MatchPattern::StringLit(s) => { out.push('"'); out.push_str(s); out.push('"'); }
-                    MatchPattern::Wildcard => { out.push('_'); }
+                    gen_stmt(&arm.body, out, indent + 1, ctx, result_fn, declared);
+                    out.push_str(&pad); out.push_str("}");
                 }
-                out.push_str(" => {\n");
-                gen_stmt(&arm.body, out, indent + 2, ctx, result_fn, declared);
-                out.push_str(&pad); out.push_str("    }\n");
+                out.push('\n');
+            } else {
+                out.push_str("match "); gen_expr(expr, out, ctx);
+                if has_string_pat { out.push_str(".as_str()"); }
+                out.push_str(" {\n");
+                for arm in arms {
+                    out.push_str(&pad); out.push_str("    ");
+                    match &arm.pattern {
+                        MatchPattern::Variant { name, bindings } => {
+                            // Handle built-in Option/Result variants
+                            if name == "None" {
+                                out.push_str("None");
+                            } else if name == "Some" || name == "Ok" || name == "Err" {
+                                out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                            } else if let Some(en) = ctx.variant_to_enum.get(name) {
+                                out.push_str(en); out.push_str("::");
+                                out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                            } else {
+                                out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                            }
+                        }
+                        MatchPattern::StringLit(s) => { out.push('"'); out.push_str(s); out.push('"'); }
+                        MatchPattern::Wildcard => { out.push('_'); }
+                        _ => {}
+                    }
+                    out.push_str(" => {\n");
+                    gen_stmt(&arm.body, out, indent + 2, ctx, result_fn, declared);
+                    out.push_str(&pad); out.push_str("    }\n");
+                }
+                out.push_str(&pad); out.push_str("}\n");
             }
-            out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::Return { value, .. } => {
             if result_fn {
@@ -938,6 +992,7 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 "slice" => Some(("slice_range", &["&str", "i64", "i64"] as &[&str])),
                 "slice_from" => Some(("slice_from", &["&str", "i64"] as &[&str])),
                 "split_lines" if args.is_empty() => Some(("split_lines", &["&str"] as &[&str])),
+                "split" if args.len() == 1 => Some(("split", &["&str", "&str"] as &[&str])),
                 _ => None,
             };
             if let Some((rt_fn, param_types)) = rt_method {
@@ -959,22 +1014,116 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 out.push_str(".len() as i64");
                 return;
             }
-            // .first() → .first().copied()
+            // .first() → .first().copied().unwrap_or(0)
             if method == "first" && args.is_empty() {
                 gen_expr(object, out, ctx);
-                out.push_str(".first().copied()");
+                out.push_str(".first().copied().unwrap_or(0)");
                 return;
             }
-            // .last() → .last().copied()
+            // .last() → .last().copied().unwrap_or(0)
             if method == "last" && args.is_empty() {
                 gen_expr(object, out, ctx);
-                out.push_str(".last().copied()");
+                out.push_str(".last().copied().unwrap_or(0)");
+                return;
+            }
+            // .to_int() → str_to_int(&s) возвращает Option<i64>
+            if method == "to_int" && args.is_empty() {
+                out.push_str("u_runtime::str_to_int(&");
+                gen_expr(object, out, ctx);
+                out.push_str(")");
+                return;
+            }
+            // .to_float() → str_to_float(&s) возвращает Option<f64>
+            if method == "to_float" && args.is_empty() {
+                out.push_str("u_runtime::str_to_float(&");
+                gen_expr(object, out, ctx);
+                out.push_str(")");
                 return;
             }
             // .sum() → .iter().sum::<i64>()
             if method == "sum" && args.is_empty() {
                 gen_expr(object, out, ctx);
                 out.push_str(".iter().sum::<i64>()");
+                return;
+            }
+            // .sort() → .clone(); v.sort(); v
+            if method == "sort" && args.is_empty() {
+                out.push_str("{ let mut __v = ");
+                gen_expr(object, out, ctx);
+                out.push_str(".clone(); __v.sort(); __v }");
+                return;
+            }
+            // .reverse() → .clone().into_iter().rev().collect::<Vec<_>>()
+            if method == "reverse" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".clone().into_iter().rev().collect::<Vec<_>>()");
+                return;
+            }
+            // .is_empty() → .is_empty()
+            if method == "is_empty" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".is_empty()");
+                return;
+            }
+            // .append(item) → .clone().push(item) (returns new vec)
+            if method == "append" && args.len() == 1 {
+                out.push_str("{ let mut __v = ");
+                gen_expr(object, out, ctx);
+                out.push_str(".clone(); __v.push(");
+                gen_expr(&args[0], out, ctx);
+                out.push_str("); __v }");
+                return;
+            }
+            // .to_upper() → .to_uppercase()
+            if method == "to_upper" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".to_uppercase()");
+                return;
+            }
+            // .to_lower() → .to_lowercase()
+            if method == "to_lower" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".to_lowercase()");
+                return;
+            }
+            // .to_string() для Int/Float
+            if method == "to_string" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".to_string()");
+                return;
+            }
+            // .is_ok() → .is_ok()
+            if method == "is_ok" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".is_ok()");
+                return;
+            }
+            // .is_err() → .is_err()
+            if method == "is_err" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".is_err()");
+                return;
+            }
+            // .unwrap() → .unwrap()
+            if method == "unwrap" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".unwrap()");
+                return;
+            }
+            // .unwrap_or(default) → .unwrap_or(default)
+            if method == "unwrap_or" && args.len() == 1 {
+                gen_expr(object, out, ctx);
+                out.push_str(".unwrap_or(");
+                gen_expr(&args[0], out, ctx);
+                out.push_str(")");
+                return;
+            }
+            // .recv_timeout(ms) → .recv_timeout(ms).await
+            if method == "recv_timeout" && args.len() == 1 {
+                gen_expr(object, out, ctx);
+                out.push_str(".recv_timeout(");
+                gen_expr(&args[0], out, ctx);
+                out.push_str(").await");
                 return;
             }
             // .filter(fn(x) expr) → .into_iter().filter(|x| expr).collect::<Vec<_>>()
@@ -1048,10 +1197,9 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::Index { object, index, .. } => {
             gen_expr(object, out, ctx);
-            out.push('[');
+            out.push_str(".get(");
             gen_expr(index, out, ctx);
-            // Convert i64 index to usize for Vec
-            out.push_str(" as usize]");
+            out.push_str(" as usize).cloned().unwrap()");
         }
         Expr::List { elements, .. } => {
             out.push_str("vec!["); gen_args(elements, out, ctx); out.push(']');
