@@ -371,12 +371,11 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     
     // Type checking
     if let Err(errors) = u::type_checker::check_program(&ast) {
-        let mut messages = Vec::new();
+        let mut output = String::from("Ошибки типизации:");
         for e in errors {
-            let line = source[..e.span.start].lines().count();
-            messages.push(format!("{}:{}: {}", path.display(), line, e.message));
+            output.push_str(&e.format(&source, &path.to_string_lossy()));
         }
-        return Err(anyhow!("Ошибки типизации:\n{}", messages.join("\n")));
+        return Err(anyhow!(output));
     }
     
     // Cycle detection - reject cyclic struct references

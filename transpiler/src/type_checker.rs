@@ -119,6 +119,38 @@ impl TypeCtx {
 pub struct TypeError {
     pub message: String,
     pub span: Span,
+    pub context: Option<String>, // в какой функции/блоке
+    pub help: Option<String>,    // подсказка как исправить
+}
+
+impl TypeError {
+    /// Форматировать ошибку для вывода
+    pub fn format(&self, source: &str, filename: &str) -> String {
+        let line_num = source[..self.span.start].lines().count() + 1;
+        let line_start = source[..self.span.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = source[self.span.start..].find('\n').map(|i| self.span.start + i).unwrap_or(source.len());
+        let line = &source[line_start..line_end];
+        let col = self.span.start - line_start + 1;
+        
+        let mut output = format!("\n[ошибка] {}:{}:{}\n", filename, line_num, col);
+        output.push_str(&format!("{}\n", self.message));
+        
+        if let Some(ctx) = &self.context {
+            output.push_str(&format!("контекст: {}\n", ctx));
+        }
+        
+        output.push_str(&format!("{:>4} | {}\n", line_num, line));
+        
+        // Подчеркивание ошибки
+        let underline = " ".repeat(col - 1) + &"^".repeat(self.span.end - self.span.start);
+        output.push_str(&format!("     | {}\n", underline));
+        
+        if let Some(help) = &self.help {
+            output.push_str(&format!("подсказка: {}\n", help));
+        }
+        
+        output
+    }
 }
 
 /// Проверить тип выражения
@@ -151,10 +183,16 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                         (Type::Int, Type::Float) | (Type::Float, Type::Int) => {
                             Err(TypeError {
                                 message: format!(
-                                    "Несовместимые типы для '{}': {:?} и {:?}. Используйте явное преобразование",
+                                    "Несовместимые типы для '{}': {:?} и {:?}",
                                     op, left_type, right_type
                                 ),
                                 span: span.clone(),
+                                context: None,
+                                help: Some(format!(
+                                    "Используйте явное преобразование: {}(expr) или {}(expr)",
+                                    if left_type == Type::Int { "Float" } else { "Int" },
+                                    if right_type == Type::Int { "Float" } else { "Int" }
+                                )),
                             })
                         }
                         _ => Err(TypeError {
@@ -178,6 +216,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                 left_type, right_type
                             ),
                             span: span.clone(),
+                            context: None,
+                            help: Some("Операторы == и != требуют одинаковых типов".to_string()),
                         })
                     }
                 }
@@ -192,6 +232,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                 op, left_type, right_type
                             ),
                             span: span.clone(),
+                            context: None,
+                            help: Some("Используйте операторы < > только для Int или Float".to_string()),
                         }),
                     }
                 }
@@ -206,6 +248,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                 op, left_type, right_type
                             ),
                             span: span.clone(),
+                            context: None,
+                            help: Some("Используйте операторы && || только для Bool".to_string()),
                         }),
                     }
                 }
@@ -213,6 +257,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 _ => Err(TypeError {
                     message: format!("Неизвестный оператор: {}", op),
                     span: span.clone(),
+                    context: None,
+                    help: Some("Доступные операторы: + - * / % == != < > <= >= && ||".to_string()),
                 }),
             }
         }
@@ -232,6 +278,11 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                 name, expected_params.len(), arg_types.len()
                             ),
                             span: span.clone(),
+                            context: None,
+                            help: Some(format!(
+                                "Ожидается: {}",
+                                expected_params.iter().map(|t| format!("{:?}", t)).collect::<Vec<_>>().join(", ")
+                            )),
                         });
                     }
                     
@@ -243,6 +294,11 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                     i + 1, name, expected, actual
                                 ),
                                 span: span.clone(),
+                                context: None,
+                                help: Some(format!(
+                                    "Аргумент {} должен быть типа {:?}",
+                                    i + 1, expected
+                                )),
                             });
                         }
                     }
@@ -252,6 +308,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 None => Err(TypeError {
                     message: format!("Неизвестная функция: {}", name),
                     span: span.clone(),
+                    context: None,
+                    help: Some("Проверьте имя функции или импортируйте нужный модуль".to_string()),
                 }),
             }
         }
