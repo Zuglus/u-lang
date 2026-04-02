@@ -1,0 +1,119 @@
+// concurrent_types.u — Конкурентность: spawn и Channel
+
+// === Простой spawn ===
+print("=== Простой spawn ===")
+
+fn worker(id: Int)
+    print("Worker $id запущен")
+end
+
+spawn worker(1)
+spawn worker(2)
+
+// === Channel для коммуникации ===
+print("")
+print("=== Channel ===")
+
+fn message_worker(id: Int, ch: Channel)
+    msg = ch.recv()
+    print("Worker $id получил: $msg")
+end
+
+ch = Channel.new()
+spawn message_worker(1, ch)
+ch.send("Hello")
+
+// === Многопоточная обработка ===
+print("")
+print("=== Пул воркеров ===")
+
+fn pool_worker(id: Int, ch: Channel)
+    while true
+        task = ch.recv()
+        if task == "stop"
+            print("Worker $id остановлен")
+            return
+        end
+        print("Worker $id обрабатывает: $task")
+    end
+end
+
+task_channel = Channel.new()
+spawn pool_worker(1, task_channel)
+spawn pool_worker(2, task_channel)
+
+task_channel.send("task1")
+task_channel.send("task2")
+task_channel.send("task3")
+task_channel.send("stop")
+task_channel.send("stop")
+
+// === Производитель-потребитель ===
+print("")
+print("=== Producer-Consumer ===")
+
+fn producer(ch: Channel, items: List)
+    for item in items
+        ch.send(item)
+        print("Произведено: $item")
+    end
+    ch.send("done")
+end
+
+fn consumer(id: Int, ch: Channel)
+    while true
+        item = ch.recv()
+        if item == "done"
+            print("Consumer $id: завершено")
+            return
+        end
+        print("Consumer $id потребил: $item")
+    end
+end
+
+buffer = Channel.new()
+items = ["apple", "banana", "cherry"]
+
+spawn producer(buffer, items)
+spawn consumer(1, buffer)
+
+// === Параллельное вычисление ===
+print("")
+print("=== Параллельное вычисление ===")
+
+fn compute_square(n: Int, result_ch: Channel)
+    square = n * n
+    result_ch.send(square)
+end
+
+results = Channel.new()
+
+spawn compute_square(2, results)
+spawn compute_square(3, results)
+spawn compute_square(4, results)
+
+r1 = results.recv()
+r2 = results.recv()
+r3 = results.recv()
+
+print("Квадраты: $r1, $r2, $r3")
+
+// === Ограничение мутабельности в spawn ===
+print("")
+print("=== Безопасность spawn ===")
+
+// Безопасно: только чтение shared_data
+shared_list = [1, 2, 3, 4, 5]
+
+fn sum_worker(data: List, start_idx: Int, end_idx: Int, ch: Channel)
+    partial_sum = 0
+    // Суммируем часть списка
+    // (в реальности нужно индексирование)
+    partial_sum = 10  // заглушка
+    ch.send(partial_sum)
+end
+
+// Небезопасно (компилятор должен отловить):
+// fn bad_worker(mut data: List[Int])
+//     data[0] = 999   // мутация shared данных!
+// end

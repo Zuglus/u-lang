@@ -70,7 +70,8 @@ elif_clause = { elif_kw ~ expression ~ NEWLINE+ ~ block }
 else_clause = { else_kw ~ NEWLINE+ ~ block }
 
 // Expressions — precedence from low to high
-expression     = { comparison }
+expression     = { logical }
+logical        = { comparison ~ (logical_op ~ comparison)* }
 comparison     = { addition ~ (comp_op ~ addition)? }
 addition       = { multiplication ~ (add_op ~ multiplication)* }
 multiplication = { unary ~ (mul_op ~ unary)* }
@@ -86,7 +87,10 @@ comp_op    = { ">=" | "<=" | "!=" | "==" | ">" | "<" }
 add_op     = { "+" | "-" }
 mul_op     = { "*" | "/" | "%" }
 prefix_op  = { "-" | not_kw }
+logical_op = { and_kw | or_kw }
 not_kw     = @{ "not" ~ !(LETTER | ASCII_DIGIT | "_") }
+and_kw     = @{ "and" ~ !(LETTER | ASCII_DIGIT | "_") }
+or_kw      = @{ "or" ~ !(LETTER | ASCII_DIGIT | "_") }
 
 // Expression parts
 lambda          = { fn_kw ~ "(" ~ param_list? ~ ")" ~ expression }

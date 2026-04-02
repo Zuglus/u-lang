@@ -19,7 +19,8 @@ fn is_kw(rule: Rule) -> bool {
         | Rule::struct_kw | Rule::enum_kw | Rule::match_kw
         | Rule::spawn_kw | Rule::loop_kw | Rule::memory_kw | Rule::use_kw
         | Rule::trait_kw | Rule::impl_kw | Rule::test_kw | Rule::mut_kw
-        | Rule::break_kw | Rule::continue_kw | Rule::while_kw | Rule::pub_kw)
+        | Rule::break_kw | Rule::continue_kw | Rule::while_kw | Rule::pub_kw
+        | Rule::and_kw | Rule::or_kw | Rule::not_kw)
 }
 
 fn meaningful(pairs: pest::iterators::Pairs<'_, Rule>) -> impl Iterator<Item = pest::iterators::Pair<'_, Rule>> + '_ {
@@ -388,6 +389,15 @@ fn build_for_pattern(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<ForPat
 fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
     match pair.as_rule() {
         Rule::expression => build_expression(pair.into_inner().next().unwrap()),
+        Rule::logical => {
+            let s = span(pair.as_span());
+            let mut inner = pair.into_inner();
+            let left = build_expression(inner.next().unwrap())?;
+            match inner.next() {
+                Some(op) => Ok(Expr::BinaryOp { left: Box::new(left), op: op.as_str().into(), right: Box::new(build_expression(inner.next().unwrap())?), span: s }),
+                None => Ok(left),
+            }
+        }
         Rule::comparison => {
             let s = span(pair.as_span());
             let mut inner = pair.into_inner();

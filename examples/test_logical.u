@@ -1,0 +1,29 @@
+// test_logical.u — Тест логических операторов
+
+a = true
+b = false
+
+// not
+r1 = not a           // false
+r2 = not b           // true
+
+// and
+r3 = a and a         // true
+r4 = a and b         // false
+r5 = b and a         // false
+r6 = b and b         // false
+
+// or
+r7 = a or a          // true
+r8 = a or b          // true
+r9 = b or a          // true
+r10 = b or b         // false
+
+// Комбинации
+r11 = a and (not b)  // true
+r12 = (not a) or b   // false
+
+print("not true: $r1")
+print("true and false: $r4")
+print("true or false: $r8")
+print("true and (not false): $r11")

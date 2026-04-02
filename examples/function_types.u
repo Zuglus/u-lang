@@ -1,0 +1,126 @@
+// function_types.u — Функции с разными комбинациями типов
+
+// === Функции с базовыми типами ===
+print("=== Функции с базовыми типами ===")
+
+fn add(a: Int, b: Int) -> Int
+    return a + b
+end
+
+fn greet(name: String) -> String
+    return "Привет, $name!"
+end
+
+fn is_positive(n: Int) -> Bool
+    return n > 0
+end
+
+print("add(3, 5) = $(add(3, 5))")
+print(greet("Мир"))
+print("is_positive(10): $(is_positive(10))")
+
+// === Функции без возврата (side effects) ===
+print("")
+print("=== Функции без возврата ===")
+
+fn print_info(name: String, age: Int)
+    print("Имя: $name, Возраст: $age")
+end
+
+fn update_counter(mut c: Counter, delta: Int)
+    c.value = c.value + delta
+end
+
+struct Counter
+    value: Int
+end
+
+c = Counter(value: 0)
+update_counter(c, 5)
+print("Счётчик: $(c.value)")
+
+// === Функции со списками ===
+print("")
+print("=== Функции со списками ===")
+
+fn sum_list(numbers: List) -> Int
+    total = 0
+    for n in numbers
+        total = total + n
+    end
+    return total
+end
+
+fn contains(list: List, target: Int) -> Bool
+    for item in list
+        if item == target
+            return true
+        end
+    end
+    return false
+end
+
+nums = [1, 2, 3, 4, 5]
+print("Сумма: $(sum_list(nums))")
+print("Содержит 3: $(contains(nums, 3))")
+print("Содержит 10: $(contains(nums, 10))")
+
+// === Функции со структурами ===
+print("")
+print("=== Функции со структурами ===")
+
+struct Rectangle
+    width: Int
+    height: Int
+end
+
+fn scale_rect(r: Rectangle, factor: Int) -> Rectangle
+    return Rectangle(width: r.width * factor, height: r.height * factor)
+end
+
+rect = Rectangle(width: 2, height: 3)
+scaled = scale_rect(rect, 2)
+print("Исходный: $(rect.width)x$(rect.height)")
+print("Масштабированный: $(scaled.width)x$(scaled.height)")
+
+// === Перегрузка через типажи (traits) ===
+print("")
+print("=== Типажи (traits) ===")
+
+trait Printable
+    fn to_string(self) -> String
+end
+
+impl Printable for Rectangle
+    fn to_string(self) -> String
+        return "Rectangle($(self.width)x$(self.height))"
+    end
+end
+
+// === Высшие функции (функции как значения) ===
+// Примечание: типизация функций fn(T) -> R пока не поддерживается
+// print("=== Высшие функции ===")
+
+// === Функции с enum ===
+print("")
+print("=== Функции с enum ===")
+
+enum Operation
+    Add(a: Int, b: Int)
+    Sub(a: Int, b: Int)
+    Mul(a: Int, b: Int)
+end
+
+fn execute(op: Operation) -> Int
+    match op
+        Add(a, b) => return a + b
+        Sub(a, b) => return a - b
+        Mul(a, b) => return a * b
+    end
+end
+
+op1 = Add(a: 5, b: 3)
+op2 = Mul(a: 4, b: 7)
+
+print("5 + 3 = $(execute(op1))")
+print("4 * 7 = $(execute(op2))")

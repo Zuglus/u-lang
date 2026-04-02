@@ -243,7 +243,7 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                     }
                 }
                 
-                "&&" | "||" => {
+                "&&" | "||" | "and" | "or" => {
                     // Логические: оба Bool
                     match (&left_type, &right_type) {
                         (Type::Bool, Type::Bool) => Ok(Type::Bool),
@@ -254,7 +254,7 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                             ),
                             span: span.clone(),
                             context: None,
-                            help: Some("Используйте операторы && || только для Bool".to_string()),
+                            help: Some("Используйте операторы and/or только для Bool".to_string()),
                         }),
                     }
                 }
@@ -263,7 +263,7 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                     message: format!("Неизвестный оператор: {}", op),
                     span: span.clone(),
                     context: None,
-                    help: Some("Доступные операторы: + - * / % == != < > <= >= && ||".to_string()),
+                    help: Some("Доступные операторы: + - * / % == != < > <= >= and or not".to_string()),
                 }),
             }
         }
@@ -399,11 +399,20 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
             }
         }
         
+        Expr::StructInit { name, .. } => {
+            // Проверить, является ли это enum вариантом
+            for (enum_name, variants) in &ctx.enums {
+                if variants.iter().any(|(v, _)| v == name) {
+                    return Ok(Type::Enum(enum_name.clone()));
+                }
+            }
+            // Иначе это структура
+            Ok(Type::Struct(name.clone()))
+        }
+        
         _ => Ok(Type::Unknown), // Пока не реализовано
     }
 }
-
-/// Проверить все инструкции программы
 pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
     let mut ctx = TypeCtx::new();
     let mut errors = Vec::new();
@@ -413,7 +422,7 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
         match stmt {
             Stmt::FnDef { name, params, return_type, .. } => {
                 let param_types: Vec<Type> = params.iter()
-                    .map(|p| parse_type(&p.type_ann.clone().unwrap_or_default()))
+                    .map(|p| p.type_ann.as_ref().map(|t| parse_type(t)).unwrap_or(Type::Unknown))
                     .collect();
                 let ret_type = return_type.as_ref()
                     .map(|t| parse_type(t))
@@ -425,6 +434,12 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
                     .map(|f| (f.name.clone(), parse_type(&f.type_name)))
                     .collect();
                 ctx.structs.insert(name.clone(), field_types);
+            }
+            Stmt::TypeDef { name, variants, .. } => {
+                let enum_variants: Vec<(String, Vec<Type>)> = variants.iter()
+                    .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name)).collect()))
+                    .collect();
+                ctx.enums.insert(name.clone(), enum_variants);
             }
             _ => {}
         }
@@ -530,17 +545,36 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
         }
 
         Stmt::Match { expr, arms, span: _ } => {
-            let _expr_type = check_expr(expr, ctx)?;
+            let expr_type = check_expr(expr, ctx)?;
+            eprintln!("DEBUG MATCH: expr_type={:?}, enums={:?}", expr_type, ctx.enums);
             
             for arm in arms {
-                // Проверить паттерн и тело
                 ctx.enter_block();
                 
-                // Добавить переменные из паттерна в контекст
                 match &arm.pattern {
-                    MatchPattern::Variant { bindings, .. } => {
-                        for binding in bindings {
-                            ctx.add_var(binding.clone(), Type::Unknown);
+                    MatchPattern::Variant { name: variant_name, bindings } => {
+                        // Получить типы полей для варианта enum
+                        let enum_name = match &expr_type {
+                            Type::Enum(name) => Some(name.clone()),
+                            Type::Struct(name) => Some(name.clone()), // enum может быть распознан как struct
+                            _ => None,
+                        };
+                        
+                        eprintln!("DEBUG: expr_type={:?}, enum_name={:?}, enums={:?}", expr_type, enum_name, ctx.enums.keys().collect::<Vec<_>>());
+                        
+                        let binding_types: Vec<Type> = if let Some(name) = &enum_name {
+                            ctx.enums.get(name).and_then(|variants| {
+                                variants.iter().find(|(v, _)| v == variant_name).map(|(_, types)| types.clone())
+                            }).unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
+                        
+                        eprintln!("DEBUG: variant_name={}, binding_types={:?}", variant_name, binding_types);
+                        
+                        for (i, binding) in bindings.iter().enumerate() {
+                            let typ = binding_types.get(i).cloned().unwrap_or(Type::Unknown);
+                            ctx.add_var(binding.clone(), typ);
                         }
                     }
                     MatchPattern::List(ListPattern::Single(name)) => {
@@ -548,7 +582,7 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                     }
                     MatchPattern::List(ListPattern::Cons(head, tail)) => {
                         ctx.add_var(head.clone(), Type::Unknown);
-                        ctx.add_var(tail.clone(), Type::Unknown); // List[T]
+                        ctx.add_var(tail.clone(), Type::Unknown);
                     }
                     _ => {}
                 }

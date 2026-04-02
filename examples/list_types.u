@@ -1,0 +1,117 @@
+// list_types.u — Списки и операции с ними
+
+// === Создание списков ===
+print("=== Создание списков ===")
+
+// Пустой список
+empty = []
+
+// Список Int
+numbers = [1, 2, 3, 4, 5]
+
+// Список String
+names = ["Анна", "Борис", "Вика"]
+
+// Список Bool
+flags = [true, false, true]
+
+// Список разных типов (не рекомендуется, но возможно)
+// mixed = [1, "hello", true]  // Тип List[Unknown]
+
+print("numbers: $numbers")
+print("names: $names")
+
+// === Индексация ===
+print("")
+print("=== Индексация ===")
+first = numbers[0]      // 1
+second = numbers[1]     // 2
+last = numbers[4]       // 5
+
+print("first: $first, second: $second, last: $last")
+
+// === Методы списков (если реализованы) ===
+print("")
+print("=== Методы списков ===")
+
+// Длина
+// len = numbers.len()     // 5
+
+// Сумма (для Int)
+// total = numbers.sum()   // 15
+
+// Первый и последний
+// first_elem = numbers.first()   // 1
+// last_elem = numbers.last()     // 5
+
+// === Итерирование по списку ===
+print("")
+print("=== Итерирование ===")
+
+// for по списку
+print("Элементы numbers:")
+for n in numbers
+    print("  $n")
+end
+
+// for с индексом (вручную)
+print("Элементы names:")
+for name in names
+    print("  Имя: $name")
+end
+
+// === Фильтрация и преобразование ===
+print("")
+print("=== Фильтрация и map ===")
+
+// Фильтрация (если реализована)
+// evens = numbers.filter(fn(x) x % 2 == 0)   // [2, 4]
+
+// Map (если реализован)
+// doubled = numbers.map(fn(x) x * 2)         // [2, 4, 6, 8, 10]
+
+// === Вложенные списки ===
+print("")
+print("=== Вложенные списки ===")
+
+// Вложенные списки — списки списков
+// (может не поддерживаться в текущей версии)
+
+// matrix = [
+//     [1, 2, 3],
+//     [4, 5, 6],
+//     [7, 8, 9]
+// ]
+// element = matrix[1][2]      // 6 (вторая строка, третий элемент)
+// print("matrix[1][2] = $element")
+
+// Альтернатива: работа с индексами
+// (вложенные списки через индексацию)
+
+row1 = [1, 2, 3]
+row2 = [4, 5, 6]
+rows = [row1, row2]
+
+// Доступ к элементу
+inner = rows[0]
+val = inner[1]
+print("rows[0][1] = $val")
+
+// === Списки структур ===
+print("")
+print("=== Списки структур ===")
+
+struct Person
+    name: String
+    age: Int
+end
+
+// Конструкторы в одну строку
+p1 = Person(name: "Анна", age: 25)
+p2 = Person(name: "Борис", age: 30)
+people = [p1, p2]
+
+print("Список людей:")
+for person in people
+    print("  $(person.name), $(person.age) лет")
+end
