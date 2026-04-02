@@ -119,7 +119,7 @@ pub enum StringPart {
     Interpolation(Expr),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

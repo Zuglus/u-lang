@@ -25,6 +25,7 @@ pub struct TypeCtx {
     /// Структуры → поля
     structs: HashMap<String, HashMap<String, Type>>,
     /// Enum → варианты
+    #[allow(dead_code)]
     enums: HashMap<String, Vec<(String, Vec<Type>)>>,
     /// Методы типов → (имя метода → (параметры, возврат))
     methods: HashMap<String, HashMap<String, (Vec<Type>, Type)>>,
@@ -167,6 +168,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 .ok_or_else(|| TypeError {
                     message: format!("Неизвестная переменная: {}", name),
                     span: span.clone(),
+                    context: None,
+                    help: None,
                 })
         }
         
@@ -201,6 +204,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                 op, left_type, right_type
                             ),
                             span: span.clone(),
+                            context: None,
+                            help: None,
                         }),
                     }
                 }
@@ -332,6 +337,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 _ => return Err(TypeError {
                     message: format!("Методы не поддерживаются для типа {:?}", obj_type),
                     span: span.clone(),
+                    context: None,
+                    help: None,
                 }),
             };
             
@@ -346,6 +353,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                     type_name, method, expected_params.len(), arg_types.len()
                                 ),
                                 span: span.clone(),
+                                context: None,
+                                help: None,
                             });
                         }
                         
@@ -357,6 +366,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                         i + 1, type_name, method, expected, actual
                                     ),
                                     span: span.clone(),
+                                    context: None,
+                                    help: None,
                                 });
                             }
                         }
@@ -375,11 +386,15 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                     None => Err(TypeError {
                         message: format!("Неизвестный метод '{}.{}'", type_name, method),
                         span: span.clone(),
+                        context: None,
+                        help: None,
                     }),
                 }
                 None => Err(TypeError {
                     message: format!("Нет методов для типа '{}'", type_name),
                     span: span.clone(),
+                    context: None,
+                    help: None,
                 }),
             }
         }
@@ -467,6 +482,8 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                 return Err(TypeError {
                     message: format!("Условие if должно быть Bool, получено {:?}", cond_type),
                     span: Span { start: 0, end: 0 },
+                    context: None,
+                    help: None,
                 });
             }
             
@@ -482,6 +499,8 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                     return Err(TypeError {
                         message: format!("Условие elif должно быть Bool, получено {:?}", cond_type),
                         span: Span { start: 0, end: 0 },
+                        context: None,
+                        help: None,
                     });
                 }
                 
@@ -503,14 +522,14 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
             Ok(())
         }
         
-        Stmt::Return { value, span } => {
+        Stmt::Return { value, span: _ } => {
             if let Some(expr) = value {
                 check_expr(expr, ctx)?;
             }
             Ok(())
         }
 
-        Stmt::Match { expr, arms, span } => {
+        Stmt::Match { expr, arms, span: _ } => {
             let _expr_type = check_expr(expr, ctx)?;
             
             for arm in arms {
@@ -547,6 +566,8 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                 return Err(TypeError {
                     message: format!("Условие while должно быть Bool, получено {:?}", cond_type),
                     span: Span { start: 0, end: 0 },
+                    context: None,
+                    help: None,
                 });
             }
             
@@ -560,7 +581,7 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
         }
 
         Stmt::ForLoop { pattern, iter, body, .. } => {
-            let iter_type = check_expr(iter, ctx)?;
+            let _iter_type = check_expr(iter, ctx)?;
             
             ctx.enter_block();
             

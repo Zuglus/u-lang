@@ -32,7 +32,7 @@ enum Cli {
         file: Option<PathBuf>,
     },
     /// Format .u files
-    Fmt {
+    Format {
         #[arg()]
         files: Vec<PathBuf>,
         /// Check formatting without making changes
@@ -61,7 +61,7 @@ fn main() -> anyhow::Result<()> {
             eprintln!("OK: {} statements", ast.statements.len());
             println!("{:#?}", ast);
         }
-        Cli::Fmt { files, check } => {
+        Cli::Format { files, check } => {
             let files = if files.is_empty() { find_u_files(".")? } else { files };
             let mut needs_format = false;
             for f in &files {

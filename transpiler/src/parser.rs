@@ -22,7 +22,7 @@ fn is_kw(rule: Rule) -> bool {
         | Rule::break_kw | Rule::continue_kw | Rule::while_kw | Rule::pub_kw)
 }
 
-fn meaningful(pairs: pest::iterators::Pairs<Rule>) -> impl Iterator<Item = pest::iterators::Pair<Rule>> + '_ {
+fn meaningful(pairs: pest::iterators::Pairs<'_, Rule>) -> impl Iterator<Item = pest::iterators::Pair<'_, Rule>> + '_ {
     pairs.filter(|p| !is_kw(p.as_rule()))
 }
 
