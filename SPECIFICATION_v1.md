@@ -72,10 +72,10 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 | List | | `[1, 2, 3]` | ✅ |
 
 **String interpolation детали:**
-- `$var` — вставка переменной
-- `$(expr)` — вставка выражения 🚧 (не реализовано)
+- `$var` — вставка переменной ✅
+- `$(expr)` — вставка выражения 🚧 (парсится, но не реализовано)
 
-**Status:** ✅ Базовая интерполяция работает, выражения — нет
+**Status:** ✅ Базовая интерполяция работает
 
 ### 2.5 Comments
 
@@ -223,11 +223,11 @@ p.x = 30           // ✅ Мутация полей разрешена
 ```
 
 **Ограничения:**
-- Типы полей — только простые идентификаторы (`List`, не `List[Int]`) 🚧
+- Типы полей — только простые идентификаторы (`List`, не `List[Int]`) 🧪
 - Нет tuple-struct (`struct Point(Int, Int)`) 🚧
 - Нет unit-struct (`struct Marker`) 🚧
 
-**Status:** ✅ Базовые структуры работают, ограничения см. выше
+**Status:** 🧪 Структуры работают, но с ограничением на типы полей
 
 ### 3.5 Enum (Tagged Union)
 
@@ -256,11 +256,11 @@ end
 ```
 
 **Ограничения:**
-- Варианты ОБЯЗАТЕЛЬНО должны иметь поля (нет unit variants) 🚧
+- Варианты ОБЯЗАТЕЛЬНО должны иметь поля (нет unit variants) 🧪
 - Нет generic enum (`enum Option[T]`) 🚧
 - Нет рекурсивных enum 🚧 (нужно для AST!)
 
-**Status:** ✅ Базовые enum работают, ограничения см. выше
+**Status:** 🧪 Enum работают, но с ограничениями (всегда с полями)
 
 ### 3.6 Trait (Interface)
 
@@ -661,12 +661,26 @@ memory("after_allocation")
 
 ### 10.2 std.string
 
-| Method | Signature | Status |
-|--------|-----------|--------|
-| `s.len()` | `fn() -> Int` | ✅ |
-| `s.find(sub)` | `fn(String) -> Int` | ✅ |
-| `s.find_from(sub, from)` | `fn(String, Int) -> Int` | ✅ |
-| `s.slice(start, end)` | `fn(Int, Int) -> String` | ✅ |
+| Method | Signature | Status | Notes |
+|--------|-----------|--------|-------|
+| `s.len()` | `fn() -> Int` | ✅ | |
+| `s.find(sub)` | `fn(String) -> Int` | ✅ | |
+| `s.find_from(sub, from)` | `fn(String, Int) -> Int` | ✅ | |
+| `s.slice(start, end)` | `fn(Int, Int) -> String` | ✅ | |
+| `s.slice_from(start)` | `fn(Int) -> String` | ✅ | |
+| `s.split(delim)` | `fn(String) -> List[String]` | ✅ | |
+| `s.split_lines()` | `fn() -> List[String]` | ✅ | |
+| `s.first()` | `fn() -> String` | ✅ | Первый char или пустая строка |
+| `s.last()` | `fn() -> String` | ✅ | Последний char или пустая строка |
+| `s.trim()` | `fn() -> String` | 🧪 | В runtime ✅, generator ❌ |
+| `s.contains(sub)` | `fn(String) -> Bool` | 🧪 | В runtime ✅, generator ❌ |
+| `s.starts_with(prefix)` | `fn(String) -> Bool` | 🧪 | В runtime ✅, generator ❌ |
+| `s.ends_with(suffix)` | `fn(String) -> Bool` | 🧪 | В runtime ✅, generator ❌ |
+| `s.replace(old, new)` | `fn(String, String) -> String` | 🧪 | В runtime ✅, generator ❌ |
+| `s.char_at(i)` | `fn(Int) -> String` | 🚧 | Используйте `slice(i, i+1)` |
+| `s.substring(start, len)` | `fn(Int, Int) -> String` | 🚧 | Используйте `slice(start, start+len)` |
+| `s.to_upper()` | `fn() -> String` | 🚧 | |
+| `s.to_lower()` | `fn() -> String` | 🚧 | |
 | `s.slice_from(start)` | `fn(Int) -> String` | ✅ |
 | `s.split(delim)` | `fn(String) -> List[String]` | ✅ |
 | `s.split_lines()` | `fn() -> List[String]` | ✅ |
@@ -683,16 +697,18 @@ memory("after_allocation")
 
 ### 10.3 std.list
 
-| Method | Signature | Status |
-|--------|-----------|--------|
-| `lst.len()` | `fn() -> Int` | ✅ |
-| `lst.first()` | `fn() -> T` | ✅ |
-| `lst.last()` | `fn() -> T` | ✅ |
-| `lst[i]` | Index access | ✅ |
-| `lst.filter(pred)` | `fn(fn(T) -> Bool) -> List[T]` | 🚧 |
-| `lst.map(f)` | `fn(fn(T) -> U) -> List[U]` | 🚧 |
-| `lst.push(val)` | `fn(T)` | 🚧 |
-| `lst.pop()` | `fn() -> T` | 🚧 |
+| Method | Signature | Status | Notes |
+|--------|-----------|--------|-------|
+| `lst.len()` | `fn() -> Int` | ✅ | |
+| `lst.first()` | `fn() -> T` | ✅ | |
+| `lst.last()` | `fn() -> T` | ✅ | |
+| `lst[i]` | Index access | ✅ | |
+| `for x in lst` | Iteration | ✅ | |
+| `lst.filter(pred)` | `fn(fn(T) -> Bool) -> List[T]` | 🚧 | |
+| `lst.map(f)` | `fn(fn(T) -> U) -> List[U]` | 🚧 | |
+| `lst.push(val)` | `fn(T)` | 🚧 | |
+| `lst.pop()` | `fn() -> T` | 🚧 | |
+| `lst.get(i)` | `fn(Int) -> T` | 🚧 | Используйте `lst[i]` |
 
 ### 10.4 std.channel
 
@@ -807,6 +823,47 @@ fn append(s: &mut String)
     s.push('!')  // ✅ Меняем
 end
 ```
+
+---
+
+## 15. Known Limitations
+
+Это известные ограничения текущей реализации. Не баги, а конструктивные ограничения языка на данном этапе.
+
+### 15.1 Grammar Limitations
+
+| Limitation | Example | Workaround |
+|------------|---------|------------|
+| Типы полей — только идентификаторы | `items: List[Int]` ❌ | `items: List` ✅ |
+| Enum варианты всегда с полями | `Pending` ❌ | `Pending(code: Int)` ✅ |
+| `end` — зарезервировано | `end = 10` ❌ | `end_ = 10` ✅ |
+| Функциональные типы в параметрах | `fn(f: fn() -> Int)` ❌ | Используйте lambda |
+| Многострочные конструкторы | `Point(\n  x: 10\n)` ❌ | `Point(x: 10)` ✅ |
+
+### 15.2 Type System Limitations
+
+| Limitation | Status | Workaround |
+|------------|--------|------------|
+| Generics | 🚧 | Concrete types only |
+| Recursive enum | 🚧 | Flatten structures |
+| Trait bounds | 🚧 | Manual dispatch |
+| Borrow checker | 📐 | Copy-by-value semantics |
+
+### 15.3 Standard Library Gaps
+
+| Missing | Workaround |
+|---------|------------|
+| `char_at(i)` | `slice(i, i+1)` |
+| `substring(start, len)` | `slice(start, start+len)` |
+| `lst.push()`, `lst.pop()` | Reconstruct list |
+| `lst.filter()`, `lst.map()` | Manual iteration |
+
+### 15.4 String Interpolation
+
+| Feature | Status | Example |
+|---------|--------|---------|
+| Variable | ✅ | `"$name"` |
+| Expression | 🚧 | `"$(x + y)"` — не реализовано |
 
 ---
 
