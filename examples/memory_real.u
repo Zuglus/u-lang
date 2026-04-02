@@ -1,0 +1,20 @@
+// РЕАЛЬНЫЙ КОД — как работает память СЕЙЧАС
+
+// 1. Создаём список
+data = [1, 2, 3]
+
+// 2. Передаём в другую переменную
+other = data
+
+// 3. Обе работают
+print("data: $(data.len()) элементов")
+print("other: $(other.len()) элементов")
+
+// 4. Используем обе
+for x in data
+    print("data: $x")
+end
+
+for x in other
+    print("other: $x")
+end
