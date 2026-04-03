@@ -1,0 +1,191 @@
+# U-lang: Конкурентность (10,000 горутин)
+
+## Проблема
+
+```u
+# Опасно: shared mutable state
+data = List.new()
+data.mut_push(42)
+
+# 10,000 горутин читают одну переменную
+for i in 0..10000 {
+    spawn(fn() {
+        print(data.len())    # ❌ data может измениться!
+    })
+}
+
+data.mut_push(43)   # кто-то читает, кто-то пишет = data race!
+```
+
+## Решение: Только Immutable или Move
+
+### Правило u-lang:
+> **В spawn можно передать только immutable данные или move ownership**
+
+```u
+# ✅ Immutable по умолчанию для примитивов
+for i in 0..10000 {
+    spawn(fn() {
+        print(i)    # ✅ i — Int, копия (immutable)
+    })
+}
+
+# ✅ Move для сложных данных
+data = List.new()
+data.mut_push(42)
+
+spawn(fn() {
+    print(data.len())    # ✅ Владение передано!
+    data.mut_push(43)    # ✅ Можем менять — мы владельцы!
+    print(data)
+})  # data move'ится внутрь closure
+
+# ❌ data больше недоступна здесь
+print(data)    # ОШИБКА: data moved into spawn
+```
+
+## Как это работает
+
+```u
+# Main thread
+config = Config.load("app.toml")    # владеем
+
+# Передаём в другой поток — move
+worker = spawn(fn() {
+    # Теперь мы владеем config
+    server = Server.new(config)     # config move'ится в server
+    server.run()
+})
+
+# config мёртв, не можем использовать
+# Но это безопасно — никаких data races!
+```
+
+## Команикация между потоками
+
+### Вариант 1: Channel (move сообщения)
+
+```u
+# Channel — глобальный тип (как Box)
+ch = Channel.new()
+
+# Поток 1: отправляем
+data = compute_data()       # List[Int]
+ch.send(mut data)           # move в channel
+# data мёртв
+
+# Поток 2: получаем
+spawn(fn() {
+    received = ch.receive() # move из channel
+    process(received)       # мы владельцы
+})
+```
+
+### Вариант 2: Immutable broadcast
+
+```u
+# Загружаем конфиг один раз
+config = Config.load("app.toml")
+
+# Делаем immutable (read-only view)
+# config.freeze() возвращает Immutable[Config]
+immutable_config = config.mut_freeze()
+
+# Теперь можно share безопасно!
+for i in 0..10000 {
+    spawn(fn() {
+        port = immutable_config.port    # ✅ только чтение
+        print(port)
+    })  # immutable_config не move'ится — share!
+}
+
+# ❌ Нельзя изменить после freeze
+immutable_config.port = 8080    # ОШИБКА: immutable!
+```
+
+## Практический пример: HTTP сервер
+
+```u
+# Main
+config = Config.load("server.toml")
+port = config.port
+
+# Make immutable для share
+frozen_config = config.mut_into_immutable()
+# config мёртв, frozen_config — shared read-only
+
+# Accept loop
+listener = TcpListener.bind(port)
+for conn in listener {
+    # conn — каждое подключение unique (move)
+    spawn(fn() {
+        handle_request(conn, frozen_config)   # frozen_config — borrow (immutable)
+    })
+}
+
+fn handle_request(conn: TcpConn, config: Immutable[Config]) {
+    # config — только чтение, thread-safe!
+    route = config.routes.find(conn.path)
+    conn.write(route.response)
+    # conn мёртв после выхода (drop)
+}
+```
+
+## Правила для AI
+
+```
+1. spawn(fn) — в closure можно захватить:
+   - Primitives (Int, Float, Bool) — copy
+   - Immutable[T] — share (read-only)
+   - Другие типы — только move
+
+2. После move переменная мёртва — проверяй использование после spawn!
+
+3. Для общения между потоками:
+   - Channel — move сообщения туда-сюда
+   - Immutable — share read-only данные
+
+4. Никакого shared mutable state!
+   ❌ Нельзя: global mutable variables
+   ❌ Нельзя: Arc<RwLock<T>> как в Rust
+   ✅ Можно: move, immutable, message passing
+```
+
+## Сравнение с другими языками
+
+| Язык | Модель | Сложность для AI |
+|------|--------|------------------|
+| Go | Goroutines + channels | ⚠️ Легко ошибиться с shared state |
+| Rust | Send/Sync traits | ❌ Сложно (lifetime + Arc<RwLock>) |
+| Pony | Actor model + capabilities | ❌ Очень сложно (iso/val/ref/tag) |
+| Erlang | Actor model (process) | ✅ Просто, но GC |
+| **U-lang** | **Move/Immutable only** | **✅ Просто: 4 правила выше** |
+
+## Итог
+
+```u
+# Безопасный параллелизм в u-lang:
+# - Никаких data races по конструкции
+# - Никаких deadlocks (нет locks!)
+# - Явное владение: легко отследить
+
+# Пример: параллельная обработка файлов
+files = ["a.txt", "b.txt", "c.txt"]
+results = Channel.new()
+
+for f in files {
+    spawn(fn() {
+        content = f.read()           # move из строки? Или borrow?
+        processed = process(content) # move
+        results.send(mut processed)  # move в channel
+    })
+}
+
+# Собираем результаты
+for _ in files {
+    r = results.receive()  # move
+    print(r)
+}
+```
+
+**Ключевое преимущество**: AI не может создать data race — компилятор не даст передать mutable shared state в spawn!
