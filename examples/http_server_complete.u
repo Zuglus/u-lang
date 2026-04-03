@@ -1,0 +1,431 @@
+# HTTP Server на U-lang
+
+## Полный пример: echo-сервер с graceful shutdown
+
+```u
+# ============================================
+# Конфигурация (immutable shared)
+# ============================================
+
+struct ServerConfig {
+    host: String,
+    port: Int,
+    max_connections: Int,
+    timeout_ms: Int
+}
+
+impl ServerConfig {
+    # Загрузка из файла
+    fn load(path: String) -> Result[ServerConfig, String] {
+        content = path.read()?
+        parsed = parse_toml(content)?
+        
+        return Ok(ServerConfig {
+            host: parsed.get("host")?,
+            port: parsed.get_int("port")?,
+            max_connections: parsed.get_int("max_connections")?,
+            timeout_ms: parsed.get_int("timeout_ms")?
+        })
+    }
+    
+    # Превращаем в immutable для share
+    fn mut_into_immutable(self) -> Immutable[ServerConfig] {
+        # Компилятор проверяет: после этого self мёртв
+        # Все поля становятся read-only
+        return Immutable.new(self)
+    }
+}
+
+# ============================================
+# HTTP Request/Response
+# ============================================
+
+struct Request {
+    method: String,
+    path: String,
+    headers: Map[String, String],
+    body: String
+}
+
+struct Response {
+    status: Int,
+    headers: Map[String, String],
+    body: String
+}
+
+impl Response {
+    fn ok(body: String) -> Response {
+        return Response {
+            status: 200,
+            headers: Map.new(),
+            body: body
+        }
+    }
+    
+    fn not_found() -> Response {
+        return Response {
+            status: 404,
+            headers: Map.new(),
+            body: "Not Found"
+        }
+    }
+    
+    fn into_bytes(self) -> Vec[U8] {
+        # Формируем HTTP-ответ
+        mut result = Vec.new()
+        result.mut_push_all("HTTP/1.1 ".bytes())
+        result.mut_push_all(self.status.to_string().bytes())
+        result.mut_push_all("\r\n".bytes())
+        # ... headers и body
+        return result
+    }
+}
+
+# ============================================
+# TCP Connection
+# ============================================
+
+struct TcpStream {
+    fd: Int,           # file descriptor (внутренний)
+    peer_addr: String
+}
+
+impl TcpStream {
+    # Читаем данные — возвращаем Result, можем получить ошибку IO
+    fn read(self, buf: mut Vec[U8]) -> Result[Int, String] {
+        # системный вызов read
+        return sys_read(self.fd, buf)
+    }
+    
+    # Пишем данные
+    fn write(self, data: Vec[U8]) -> Result[(), String] {
+        return sys_write(self.fd, data)
+    }
+    
+    # Закрываем соединение
+    fn mut_close(mut self) {
+        sys_close(self.fd)
+        # self мёртв после close
+    }
+}
+
+# ============================================
+# HTTP Parser
+# ============================================
+
+struct HttpParser {
+    buffer: Vec[U8],
+    pos: Int
+}
+
+impl HttpParser {
+    fn new() -> HttpParser {
+        return HttpParser {
+            buffer: Vec.new(),
+            pos: 0
+        }
+    }
+    
+    # Читаем из stream, парсим request
+    fn parse(mut self, stream: TcpStream) -> Result[Request, String] {
+        # Читаем данные в buffer
+        stream.read(mut self.buffer)?
+        
+        # Парсим HTTP
+        method = self.parse_method()?
+        path = self.parse_path()?
+        headers = self.parse_headers()?
+        body = self.parse_body()?
+        
+        # stream возвращается? Или move в Request?
+        # Вариант: Request не владеет stream
+        return Ok(Request {
+            method: method,
+            path: path,
+            headers: headers,
+            body: body
+        })
+    }
+    
+    fn parse_method(mut self) -> Result[String, String] {
+        # Парсим "GET / HTTP/1.1"
+        # ...
+        return Ok("GET")
+    }
+    
+    fn parse_path(mut self) -> Result[String, String] {
+        # ...
+        return Ok("/")
+    }
+    
+    fn parse_headers(mut self) -> Result[Map[String, String], String] {
+        mut headers = Map.new()
+        # ...
+        return Ok(headers)
+    }
+    
+    fn parse_body(mut self) -> Result[String, String] {
+        # ...
+        return Ok("")
+    }
+}
+
+# ============================================
+# Route Handler
+# ============================================
+
+type Handler = fn(Request, Immutable[ServerConfig]) -> Response
+
+struct Router {
+    routes: Map[String, Handler]
+}
+
+impl Router {
+    fn new() -> Router {
+        return Router { routes: Map.new() }
+    }
+    
+    fn mut_register(mut self, path: String, handler: Handler) {
+        self.routes.mut_insert(path, handler)
+    }
+    
+    fn handle(self, req: Request, config: Immutable[ServerConfig]) -> Response {
+        match self.routes.get(req.path)
+            Some(handler) => handler(req, config)
+            None => Response.not_found()
+        end
+    }
+}
+
+# ============================================
+# Connection Handler
+# ============================================
+
+# Обрабатываем одно соединение
+fn handle_connection(
+    stream: TcpStream,           # move сюда
+    router: Immutable[Router],   # share (immutable)
+    config: Immutable[ServerConfig]  # share (immutable)
+) {
+    # Парсим HTTP
+    parser = HttpParser.new()
+    req = match parser.parse(stream) {
+        Ok(r) => r
+        Err(e) => {
+            print("Parse error: " + e)
+            stream.mut_close()   # move в close
+            return
+        }
+    }
+    
+    print("[" + config.host + "] " + req.method + " " + req.path)
+    
+    # Обрабатываем
+    response = router.handle(req, config)
+    
+    # Отправляем
+    bytes = response.into_bytes()
+    match stream.write(bytes)
+        Ok(()) => {}
+        Err(e) => print("Write error: " + e)
+    end
+    
+    # Закрываем
+    stream.mut_close()
+}
+
+# ============================================
+# TCP Listener
+# ============================================
+
+struct TcpListener {
+    fd: Int,
+    config: Immutable[ServerConfig]
+}
+
+impl TcpListener {
+    fn bind(config: Immutable[ServerConfig]) -> Result[TcpListener, String] {
+        fd = sys_socket()?
+        sys_bind(fd, config.host, config.port)?
+        sys_listen(fd, config.max_connections)?
+        
+        return Ok(TcpListener {
+            fd: fd,
+            config: config
+        })
+    }
+    
+    # Принимаем соединение
+    fn accept(self) -> Result[TcpStream, String] {
+        (client_fd, addr) = sys_accept(self.fd)?
+        return Ok(TcpStream {
+            fd: client_fd,
+            peer_addr: addr
+        })
+    }
+    
+    fn mut_shutdown(mut self) {
+        sys_close(self.fd)
+    }
+}
+
+# ============================================
+# Graceful Shutdown Channel
+# ============================================
+
+struct ShutdownSignal {
+    shutdown_tx: Channel[()],
+    shutdown_rx: Channel[()]
+}
+
+impl ShutdownSignal {
+    fn new() -> ShutdownSignal {
+        ch = Channel.new()
+        return ShutdownSignal {
+            shutdown_tx: ch,
+            shutdown_rx: ch
+        }
+    }
+    
+    # Вызвать shutdown
+    fn signal(self) {
+        self.shutdown_tx.send(())   # move ()
+    }
+    
+    # Ждать shutdown
+    fn wait(self) {
+        self.shutdown_rx.receive()  # блокирующее ожидание
+    }
+}
+
+# ============================================
+# Main Server
+# ============================================
+
+fn main() {
+    # 1. Загружаем конфиг
+    config_result = ServerConfig.load("/etc/server.toml")
+    config = match config_result
+        Ok(c) => c
+        Err(e) => {
+            print("Failed to load config: " + e)
+            exit(1)
+        }
+    end
+    
+    print("Starting server on " + config.host + ":" + config.port.to_string())
+    
+    # 2. Делаем immutable для share
+    frozen_config = config.mut_into_immutable()
+    # config мёртв, frozen_config можно share между потоками
+    
+    # 3. Настраиваем роутер (тоже immutable)
+    router = Router.new()
+    router.mut_register("/", handle_index)
+    router.mut_register("/health", handle_health)
+    router.mut_register("/echo", handle_echo)
+    
+    frozen_router = router.mut_into_immutable()
+    
+    # 4. Graceful shutdown
+    shutdown = ShutdownSignal.new()
+    
+    # Обработка Ctrl+C в отдельном потоке
+    spawn(fn() {
+        wait_for_signal()   # системный вызов
+        print("Shutdown signal received...")
+        shutdown.signal()
+    })
+    
+    # 5. Запускаем listener
+    listener = match TcpListener.bind(frozen_config)
+        Ok(l) => l
+        Err(e) => {
+            print("Failed to bind: " + e)
+            exit(1)
+        }
+    end
+    
+    print("Server listening...")
+    
+    # 6. Accept loop
+    mut active_connections = 0
+    
+    loop {
+        # Проверяем shutdown (non-blocking? или select?)
+        # Пока упрощённо: accept с timeout
+        
+        match listener.accept()
+            Ok(stream) => {
+                active_connections += 1
+                
+                # Обрабатываем в отдельном потоке
+                spawn(fn() {
+                    handle_connection(stream, frozen_router, frozen_config)
+                    # active_connections--? Нужна синхронизация!
+                })
+            }
+            Err(e) => {
+                print("Accept error: " + e)
+            }
+        end
+    }
+    
+    # 7. Graceful shutdown
+    print("Waiting for connections to close...")
+    shutdown.wait()
+    
+    listener.mut_shutdown()
+    print("Server stopped")
+}
+
+# ============================================
+# Handlers
+# ============================================
+
+fn handle_index(req: Request, config: Immutable[ServerConfig]) -> Response {
+    body = "Welcome to " + config.host + ":" + config.port.to_string()
+    return Response.ok(body)
+}
+
+fn handle_health(req: Request, config: Immutable[ServerConfig]) -> Response {
+    return Response.ok("{\"status\": \"ok\"}")
+}
+
+fn handle_echo(req: Request, config: Immutable[ServerConfig]) -> Response {
+    # Echo тело запроса
+    return Response.ok(req.body)
+}
+
+# ============================================
+# Что здесь демонстрируется
+# ============================================
+
+# 1. Single ownership:
+#    - TcpStream move'ится в handler, потом в close
+#    - После mut_close stream мёртв
+
+# 2. Immutable sharing:
+#    - frozen_config share'ится между всеми потоками
+#    - frozen_router тоже share'ится
+#    - Ни один поток не может изменить
+
+# 3. Concurrency без data races:
+#    - Каждое соединение — свой поток со своим stream
+#    - Config и Router — immutable, безопасно share
+#    - Нет shared mutable state!
+
+# 4. Error handling:
+#    - Result[T, E] везде где может быть ошибка
+#    - ? для проброса ошибок
+#    - match для обработки
+
+# 5. Graceful shutdown:
+#    - Channel для сигнала между потоками
+#    - Правильное закрытие соединений
+
+# 6. Zero-cost:
+#    - Нет GC (кроме arena для immutable)
+#    - Move вместо copy
+#    - Компилируется в эффективный код
+```
