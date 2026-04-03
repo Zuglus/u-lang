@@ -17,14 +17,41 @@ struct ServerConfig {
 impl ServerConfig {
     # Загрузка из файла
     fn load(path: String) -> Result[ServerConfig, String] {
-        content = path.read()?
-        parsed = parse_toml(content)?
+        content = match path.read()
+            Ok(c) => c
+            Err(e) => return Err(e)
+        end
+        
+        parsed = match parse_toml(content)
+            Ok(p) => p
+            Err(e) => return Err(e)
+        end
+        
+        host = match parsed.get("host")
+            Some(h) => h
+            None => return Err("missing host")
+        end
+        
+        port = match parsed.get_int("port")
+            Some(p) => p
+            None => return Err("missing port")
+        end
+        
+        max_conn = match parsed.get_int("max_connections")
+            Some(m) => m
+            None => return Err("missing max_connections")
+        end
+        
+        timeout = match parsed.get_int("timeout_ms")
+            Some(t) => t
+            None => return Err("missing timeout_ms")
+        end
         
         return Ok(ServerConfig {
-            host: parsed.get("host")?,
-            port: parsed.get_int("port")?,
-            max_connections: parsed.get_int("max_connections")?,
-            timeout_ms: parsed.get_int("timeout_ms")?
+            host: host,
+            port: port,
+            max_connections: max_conn,
+            timeout_ms: timeout
         })
     }
     
@@ -129,13 +156,31 @@ impl HttpParser {
     # Читаем из stream, парсим request
     fn parse(mut self, stream: TcpStream) -> Result[Request, String] {
         # Читаем данные в buffer
-        stream.read(mut self.buffer)?
+        match stream.read(mut self.buffer)
+            Err(e) => return Err(e)
+            Ok(_) => {}
+        end
         
         # Парсим HTTP
-        method = self.parse_method()?
-        path = self.parse_path()?
-        headers = self.parse_headers()?
-        body = self.parse_body()?
+        method = match self.parse_method()
+            Ok(m) => m
+            Err(e) => return Err(e)
+        end
+        
+        path = match self.parse_path()
+            Ok(p) => p
+            Err(e) => return Err(e)
+        end
+        
+        headers = match self.parse_headers()
+            Ok(h) => h
+            Err(e) => return Err(e)
+        end
+        
+        body = match self.parse_body()
+            Ok(b) => b
+            Err(e) => return Err(e)
+        end
         
         # stream возвращается? Или move в Request?
         # Вариант: Request не владеет stream
@@ -245,9 +290,20 @@ struct TcpListener {
 
 impl TcpListener {
     fn bind(config: Immutable[ServerConfig]) -> Result[TcpListener, String] {
-        fd = sys_socket()?
-        sys_bind(fd, config.host, config.port)?
-        sys_listen(fd, config.max_connections)?
+        fd = match sys_socket()
+            Ok(f) => f
+            Err(e) => return Err(e)
+        end
+        
+        match sys_bind(fd, config.host, config.port)
+            Err(e) => return Err(e)
+            Ok(_) => {}
+        end
+        
+        match sys_listen(fd, config.max_connections)
+            Err(e) => return Err(e)
+            Ok(_) => {}
+        end
         
         return Ok(TcpListener {
             fd: fd,
@@ -257,11 +313,16 @@ impl TcpListener {
     
     # Принимаем соединение
     fn accept(self) -> Result[TcpStream, String] {
-        (client_fd, addr) = sys_accept(self.fd)?
-        return Ok(TcpStream {
-            fd: client_fd,
-            peer_addr: addr
-        })
+        result = sys_accept(self.fd)
+        match result
+            Err(e) => return Err(e)
+            Ok((client_fd, addr)) => {
+                return Ok(TcpStream {
+                    fd: client_fd,
+                    peer_addr: addr
+                })
+            }
+        end
     }
     
     fn mut_shutdown(mut self) {
@@ -417,7 +478,6 @@ fn handle_echo(req: Request, config: Immutable[ServerConfig]) -> Response {
 
 # 4. Error handling:
 #    - Result[T, E] везде где может быть ошибка
-#    - ? для проброса ошибок
 #    - match для обработки
 
 # 5. Graceful shutdown:
