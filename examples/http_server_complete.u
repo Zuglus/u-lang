@@ -54,13 +54,6 @@ impl ServerConfig {
             timeout_ms: timeout
         })
     }
-    
-    # Превращаем в immutable для share
-    fn mut_into_immutable(self) -> Immutable[ServerConfig] {
-        # Компилятор проверяет: после этого self мёртв
-        # Все поля становятся read-only
-        return Immutable.new(self)
-    }
 }
 
 # ============================================
@@ -97,12 +90,10 @@ impl Response {
         }
     }
     
-    fn into_bytes(self) -> Vec[U8] {
-        # Формируем HTTP-ответ
-        mut result = Vec.new()
-        result.mut_push_all("HTTP/1.1 ".bytes())
-        result.mut_push_all(self.status.to_string().bytes())
-        result.mut_push_all("\r\n".bytes())
+    fn into_bytes(self) -> String {
+        # Формируем HTTP-ответ как строку
+        mut result = ""
+        result = result + "HTTP/1.1 " + self.status.to_string() + "\r\n"
         # ... headers и body
         return result
     }
@@ -119,13 +110,13 @@ struct TcpStream {
 
 impl TcpStream {
     # Читаем данные — возвращаем Result, можем получить ошибку IO
-    fn read(self, buf: mut Vec[U8]) -> Result[Int, String] {
+    fn read(self, buf: mut String) -> Result[Int, String] {
         # системный вызов read
         return sys_read(self.fd, buf)
     }
     
     # Пишем данные
-    fn write(self, data: Vec[U8]) -> Result[(), String] {
+    fn write(self, data: String) -> Result[(), String] {
         return sys_write(self.fd, data)
     }
     
@@ -141,14 +132,14 @@ impl TcpStream {
 # ============================================
 
 struct HttpParser {
-    buffer: Vec[U8],
+    buffer: String,
     pos: Int
 }
 
 impl HttpParser {
     fn new() -> HttpParser {
         return HttpParser {
-            buffer: Vec.new(),
+            buffer: List.new(),
             pos: 0
         }
     }
@@ -216,13 +207,12 @@ impl HttpParser {
 }
 
 # ============================================
-# Route Handler
+# Route Handler (без type alias)
 # ============================================
 
-type Handler = fn(Request, Immutable[ServerConfig]) -> Response
-
 struct Router {
-    routes: Map[String, Handler]
+    # Храним замыкание напрямую
+    routes: Map[String, fn(Request, ServerConfig) -> Response]
 }
 
 impl Router {
@@ -230,13 +220,16 @@ impl Router {
         return Router { routes: Map.new() }
     }
     
-    fn mut_register(mut self, path: String, handler: Handler) {
+    fn mut_register(mut self, path: String, handler: fn(Request, ServerConfig) -> Response) {
         self.routes.mut_insert(path, handler)
     }
     
-    fn handle(self, req: Request, config: Immutable[ServerConfig]) -> Response {
+    fn handle(self, req: Request, config: ServerConfig) -> Response {
         match self.routes.get(req.path)
-            Some(handler) => handler(req, config)
+            Some(handler) => {
+                # handler: fn(Request, ServerConfig) -> Response
+                return handler(req, config)
+            }
             None => Response.not_found()
         end
     }
@@ -249,8 +242,8 @@ impl Router {
 # Обрабатываем одно соединение
 fn handle_connection(
     stream: TcpStream,           # move сюда
-    router: Immutable[Router],   # share (immutable)
-    config: Immutable[ServerConfig]  # share (immutable)
+    router: Router,              # move (копия для этого потока)
+    config: ServerConfig         # move (копия для этого потока)
 ) {
     # Парсим HTTP
     parser = HttpParser.new()
@@ -285,11 +278,11 @@ fn handle_connection(
 
 struct TcpListener {
     fd: Int,
-    config: Immutable[ServerConfig]
+    config: ServerConfig
 }
 
 impl TcpListener {
-    fn bind(config: Immutable[ServerConfig]) -> Result[TcpListener, String] {
+    fn bind(config: ServerConfig) -> Result[TcpListener, String] {
         fd = match sys_socket()
             Ok(f) => f
             Err(e) => return Err(e)
@@ -376,17 +369,17 @@ fn main() {
     
     print("Starting server on " + config.host + ":" + config.port.to_string())
     
-    # 2. Делаем immutable для share
-    frozen_config = config.mut_into_immutable()
-    # config мёртв, frozen_config можно share между потоками
+    # 2. Делаем копию для share (в спецификации нет Immutable[T])
+    # ServerConfig копируется при передаче в spawn
+    # config жива и может использоваться дальше
     
-    # 3. Настраиваем роутер (тоже immutable)
+    print("Starting server on " + config.host + ":" + config.port.to_string())
+    
+    # 3. Настраиваем роутер
     router = Router.new()
     router.mut_register("/", handle_index)
     router.mut_register("/health", handle_health)
     router.mut_register("/echo", handle_echo)
-    
-    frozen_router = router.mut_into_immutable()
     
     # 4. Graceful shutdown
     shutdown = ShutdownSignal.new()
@@ -399,7 +392,7 @@ fn main() {
     })
     
     # 5. Запускаем listener
-    listener = match TcpListener.bind(frozen_config)
+    listener = match TcpListener.bind(config)
         Ok(l) => l
         Err(e) => {
             print("Failed to bind: " + e)
@@ -422,7 +415,7 @@ fn main() {
                 
                 # Обрабатываем в отдельном потоке
                 spawn(fn() {
-                    handle_connection(stream, frozen_router, frozen_config)
+                    handle_connection(stream, router, config)
                     # active_connections--? Нужна синхронизация!
                 })
             }
@@ -444,16 +437,16 @@ fn main() {
 # Handlers
 # ============================================
 
-fn handle_index(req: Request, config: Immutable[ServerConfig]) -> Response {
+fn handle_index(req: Request, config: ServerConfig) -> Response {
     body = "Welcome to " + config.host + ":" + config.port.to_string()
     return Response.ok(body)
 }
 
-fn handle_health(req: Request, config: Immutable[ServerConfig]) -> Response {
+fn handle_health(req: Request, config: ServerConfig) -> Response {
     return Response.ok("{\"status\": \"ok\"}")
 }
 
-fn handle_echo(req: Request, config: Immutable[ServerConfig]) -> Response {
+fn handle_echo(req: Request, config: ServerConfig) -> Response {
     # Echo тело запроса
     return Response.ok(req.body)
 }
@@ -466,14 +459,14 @@ fn handle_echo(req: Request, config: Immutable[ServerConfig]) -> Response {
 #    - TcpStream move'ится в handler, потом в close
 #    - После mut_close stream мёртв
 
-# 2. Immutable sharing:
-#    - frozen_config share'ится между всеми потоками
-#    - frozen_router тоже share'ится
-#    - Ни один поток не может изменить
+# 2. Copy для share (в спецификации нет Immutable[T]):
+#    - config копируется для каждого потока (если small)
+#    - router копируется для каждого потока
+#    - Каждый поток имеет свою копию (безопасно)
 
 # 3. Concurrency без data races:
 #    - Каждое соединение — свой поток со своим stream
-#    - Config и Router — immutable, безопасно share
+#    - Config и Router — копии, нет shared state
 #    - Нет shared mutable state!
 
 # 4. Error handling:
