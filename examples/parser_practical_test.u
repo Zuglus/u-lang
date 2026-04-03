@@ -1,0 +1,322 @@
+# Практический тест: Парсер на U-lang
+
+## Задача
+Парсер для `1 + 2 * 3` → AST
+
+## Что тестируем
+1. **Возврат из функции** — `next_token()`, `parse_expr()`
+2. **Вложенные структуры** — `Expr` содержит `Binary { left: Expr, right: Expr }`
+3. **Рекурсивные структуры** — `Expr` рекурсивен
+
+---
+
+## Вариант A: Только копии (простой, но медленный)
+
+```u
+# Token — маленький, копируем
+struct Token {
+    kind: TokenKind,
+    value: Int
+}
+
+enum TokenKind {
+    Number,
+    Plus,
+    Mul,
+    Eof
+}
+
+# Lexer — хранит строку
+struct Lexer {
+    source: String,
+    pos: Int
+}
+
+impl Lexer {
+    # Возврат: копия Token (маленький, O(1))
+    fn next(self) -> Token {
+        # ... парсим из source
+        return Token { kind: Number, value: 42 }
+    }
+}
+
+# Expr — рекурсивный, НО через Box
+enum Expr {
+    Number(Int),
+    Binary {          # Box для рекурсии
+        left: Box[Expr],
+        op: Token,
+        right: Box[Expr]
+    }
+}
+
+# Parser
+struct Parser {
+    lexer: Lexer,
+    current: Token    # копия текущего токена (O(1))
+}
+
+impl Parser {
+    # Возврат: Box[Expr] — всегда аллоцируем
+    fn parse_expr(self) -> Box[Expr] {
+        left = self.parse_primary()   # Box[Expr]
+        
+        while self.current.kind == Plus {
+            op = self.current          # копия Token
+            self.advance()             # меняем self.current
+            right = self.parse_primary()  # Box[Expr]
+            
+            left = Box.new(Expr.Binary {
+                left: left,            # move Box
+                op: op,                # копия
+                right: right          # move Box
+            })
+        }
+        
+        return left
+    }
+    
+    fn parse_primary(self) -> Box[Expr] {
+        if self.current.kind == Number {
+            val = self.current.value   # копия Int
+            self.advance()
+            return Box.new(Expr.Number(val))
+        }
+        panic("expected number")
+    }
+    
+    fn advance(mut self) {
+        self.current = self.lexer.next()  # копия Token
+    }
+}
+
+# Использование
+lexer = Lexer.new("1 + 2 * 3")
+parser = Parser.new(lexer)
+ast = parser.parse_expr()   # Box[Expr]
+print_ast(ast)              # ✅ Работает!
+
+# Стоимость:
+# - Каждый Box.new — аллокация в куче
+# - Каждый move Box — O(1)
+# - Token копируется — O(1)
+# Итого: O(n) аллокаций для n узлов
+```
+
+**AI понимает:**
+- `Token` маленький — копируем
+- `Expr` рекурсивен — используем `Box[Expr]`
+- `Box` move'ится, не копируется
+
+**Проблема:** Много аллокаций (каждый узел AST = Box = куча)
+
+---
+
+## Вариант B: Arena (меньше аллокаций)
+
+```u
+# Arena — владеет всеми узлами
+struct AstArena {
+    nodes: List[Expr],    # все Expr здесь
+    next_id: Int
+}
+
+# Не Box, а ID!
+struct ExprRef {
+    id: Int   # индекс в arena.nodes
+}
+
+# Expr такой же, но с ExprRef вместо Box
+enum Expr {
+    Number(Int),
+    Binary {
+        left: ExprRef,    # просто Int!
+        op: Token,
+        right: ExprRef
+    }
+}
+
+# Parser держит arena
+struct Parser {
+    lexer: Lexer,
+    current: Token,
+    arena: AstArena    # владеет всеми узлами
+}
+
+impl Parser {
+    # Возврат: ExprRef (просто Int!)
+    fn parse_expr(mut self) -> ExprRef {
+        left = self.parse_primary()   # ExprRef
+        
+        while self.current.kind == Plus {
+            op = self.current
+            self.advance()
+            right = self.parse_primary()
+            
+            # Создаём узел в арене
+            left = self.arena.alloc(Expr.Binary {
+                left: left,
+                op: op,
+                right: right
+            })
+        }
+        
+        return left
+    }
+    
+    fn parse_primary(mut self) -> ExprRef {
+        if self.current.kind == Number {
+            val = self.current.value
+            self.advance()
+            return self.arena.alloc(Expr.Number(val))
+        }
+        panic("expected number")
+    }
+}
+
+# Использование
+arena = AstArena.new()
+lexer = Lexer.new("1 + 2 * 3")
+parser = Parser.new(lexer, arena)
+ast_ref = parser.parse_expr()   # ExprRef (Int)
+print_ast(arena, ast_ref)       # читаем через arena
+
+# Все узлы освобождаются разом:
+# arena.drop_all() — O(1)!
+
+# Стоимость:
+# - Одна аллокация для arena (растущий буфер)
+# - ExprRef = Int = O(1)
+# - alloc = push в вектор = O(1) амортизированно
+```
+
+**AI понимает:**
+- `ExprRef` — просто `Int`, не указатель
+- `arena.alloc()` создаёт узел, возвращает ID
+- Читаем через `arena.get(id)`
+
+**Проблема:** Нужно передавать `arena` везде для чтения
+
+---
+
+## Вариант C: Индексы для крупных, копии для мелких (компромисс)
+
+```u
+# Token — мелкий, копия
+struct Token { kind: TokenKind, value: Int }
+
+# String токенов — крупный, индекс
+struct Tokenizer {
+    source: String,
+    tokens: List[Token>,   # все токены здесь
+    current_idx: Int
+}
+
+impl Tokenizer {
+    # Возврат: Option[Int] — индекс токена
+    fn peek_index(self) -> Option<Int> {
+        if self.current_idx < self.tokens.len() {
+            return Some(self.current_idx)
+        }
+        return None
+    }
+    
+    # Читаем токен по индексу
+    fn get(self, idx: Int) -> Token {
+        return self.tokens[idx]   # копия Token
+    }
+    
+    fn advance(mut self) {
+        self.current_idx += 1
+    }
+}
+
+# AST — arena + Box hybrid
+struct Ast {
+    arena: Arena[ExprNode],
+    root: NodeRef
+}
+
+struct NodeRef {
+    id: Int
+}
+
+# ExprNode — узел AST
+struct ExprNode {
+    kind: ExprKind,
+    # metadata: line, column и т.д.
+}
+
+enum ExprKind {
+    Number(Int),
+    Binary { left: NodeRef, op: Token, right: NodeRef }
+}
+
+# Парсер
+struct Parser {
+    tokens: Tokenizer,
+    ast: Ast
+}
+
+impl Parser {
+    fn parse(mut self) -> Ast {
+        root = self.parse_expr()
+        self.ast.root = root
+        return self.ast
+    }
+    
+    fn parse_expr(mut self) -> NodeRef {
+        left = self.parse_term()
+        
+        while self.current_op_is(Plus) {
+            op = self.current_token()   # копия
+            self.advance()
+            right = self.parse_term()
+            
+            left = self.ast.arena.alloc(ExprNode {
+                kind: Binary { left, op, right }
+            })
+        }
+        
+        return left
+    }
+}
+
+# Использование
+tokens = Tokenizer.new("1 + 2 * 3")
+parser = Parser.new(tokens)
+ast = parser.parse()       # Ast с arena внутри
+print_ast(ast)             # печатаем
+# ast.arena.drop_all()    — O(1) cleanup
+```
+
+**AI понимает:**
+- Мелкое (Token) — копия
+- Крупное (String токенов) — индексы
+- Рекурсия — Arena + NodeRef
+
+---
+
+## Практический вывод
+
+| Метрика | Вариант A (Box) | Вариант B (Arena) | Вариант C (Hybrid) |
+|---------|----------------|-------------------|-------------------|
+| Аллокации | O(n) на узел | O(1) bulk | O(1) bulk |
+| Размер ссылки | 8 байт (pointer) | 8 байт (Int) | 8 байт (Int) |
+| Скорость доступа | O(1) dereference | O(1) array idx | O(1) array idx |
+| Память | Fragmented | Contiguous | Contiguous |
+| Простота для AI | ✅ Просто | ⚠️ Нужен arena | ⚠️ Два механизма |
+
+**Рекомендация для u-lang:**
+- **По умолчанию:** Box для рекурсии (просто)
+- **Для production:** Arena (быстро)
+- **Явный выбор:** программист решает
+
+```u
+# Простой код:
+node = Box.new(Expr.Binary { ... })   # аллокация
+
+# Быстрый код:
+arena = Arena.new()
+node = arena.alloc(Expr.Binary { ... })  # bulk
+```
