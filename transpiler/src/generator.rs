@@ -1002,9 +1002,9 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
-            // Channel.new() → tokio::sync::mpsc::channel(100)
-            if name == "Channel.new" {
-                out.push_str("{ let (tx, rx) = tokio::sync::mpsc::channel(100); (tx, rx) }");
+            // channel_new() -> std::sync::mpsc::channel()
+            if name == "channel_new" {
+                out.push_str("{ let (tx, rx) = std::sync::mpsc::channel(); (tx, rx) }");
                 return;
             }
             // range(start, end) → range2(start, end)
@@ -1147,14 +1147,14 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 gen_expr(object, out, ctx);
                 out.push_str("; tx.send(");
                 gen_expr(&args[0], out, ctx);
-                out.push_str(").await.unwrap() }");
+                out.push_str(").unwrap() }");
                 return;
             }
             // .receive() → rx.recv().await.unwrap()
             if method == "receive" && args.is_empty() {
                 out.push_str("{ let (_, rx) = ");
                 gen_expr(object, out, ctx);
-                out.push_str("; rx.recv().await.unwrap() }");
+                out.push_str("; rx.recv().unwrap() }");
                 return;
             }
             // .append(item) → .clone().push(item) (returns new vec)

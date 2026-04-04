@@ -47,6 +47,10 @@ impl TypeCtx {
         let phantom_fields = HashMap::new();
         ctx.structs.insert("Phantom".to_string(), phantom_fields);
         
+        // Встроенная структура Channel (без полей, только для типизации)
+        let channel_fields = HashMap::new();
+        ctx.structs.insert("Channel".to_string(), channel_fields);
+        
         // Встроенные функции
         ctx.functions.insert(
             "print".to_string(),
@@ -93,14 +97,14 @@ impl TypeCtx {
         
         // Встроенный тип Channel[T]
         let mut channel_methods = HashMap::new();
-        channel_methods.insert("send".to_string(), (vec![Type::Unknown], Type::None)); // Channel[T].send(T)
-        channel_methods.insert("receive".to_string(), (vec![], Type::Unknown)); // -> T
-        channel_methods.insert("try_receive".to_string(), (vec![], Type::Unknown)); // -> Maybe[T]
+        channel_methods.insert("send".to_string(), (vec![Type::Int], Type::None)); // Channel[Int].send(Int)
+        channel_methods.insert("receive".to_string(), (vec![], Type::Int)); // -> Int
+        channel_methods.insert("try_receive".to_string(), (vec![], Type::Int)); // -> Maybe[Int]
         ctx.methods.insert("Channel".to_string(), channel_methods);
         
-        // Встроенная функция Channel.new()
+        // Встроенная функция channel_new() -> Channel
         ctx.functions.insert(
-            "Channel.new".to_string(),
+            "channel_new".to_string(),
             (vec![], Type::Struct("Channel".to_string())),
         );
         
