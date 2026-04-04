@@ -2,6 +2,36 @@ use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
 use crate::ast::*;
 
+/// Check if a type is Copy (can be cloned instead of moved)
+/// Infer type from expression for Copy/Move decisions
+fn infer_type_from_expr(expr: &Expr, ctx: &Ctx) -> String {
+    match expr {
+        Expr::IntLiteral { .. } => "Int".to_string(),
+        Expr::FloatLiteral { .. } => "Float".to_string(),
+        Expr::BoolLiteral { .. } => "Bool".to_string(),
+        Expr::StringLiteral { .. } => "String".to_string(),
+        Expr::List { .. } => "List".to_string(),
+        Expr::StructInit { name, .. } => name.clone(),
+        Expr::Identifier { name, .. } => {
+            // Look up variable type from context
+            ctx.var_types.borrow().get(name).cloned().unwrap_or_default()
+        }
+        Expr::FunctionCall { name, .. } => {
+            // Try to infer from function name
+            if name == "channel_new" {
+                "Channel".to_string()
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn is_copy_type(type_name: &str) -> bool {
+    matches!(type_name, "Int" | "Float" | "Bool" | "i64" | "f64" | "bool")
+}
+
 struct Ctx {
     structs: HashSet<String>,
     struct_fields: HashMap<String, Vec<String>>,
@@ -11,6 +41,8 @@ struct Ctx {
     line_starts: Vec<usize>,
     filename: String,
     struct_vars: RefCell<HashSet<String>>,
+    /// Track variable types for Copy/Move decisions
+    var_types: RefCell<HashMap<String, String>>,
 }
 
 impl Ctx {
@@ -21,6 +53,7 @@ impl Ctx {
             fn_params: HashMap::new(), async_fns: HashSet::new(),
             line_starts: compute_line_starts(source), filename: filename.to_string(),
             struct_vars: RefCell::new(HashSet::new()),
+            var_types: RefCell::new(HashMap::new()),
         };
         for stmt in &program.statements {
             match stmt {
@@ -45,6 +78,9 @@ impl Ctx {
                     if is_struct_creating_expr(value, &ctx) {
                         ctx.struct_vars.borrow_mut().insert(name.clone());
                     }
+                    // Track type for Copy/Move decisions
+                    let type_name = infer_type_from_expr(value, &ctx);
+                    ctx.var_types.borrow_mut().insert(name.clone(), type_name);
                 }
                 _ => {}
             }
@@ -884,7 +920,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                 Expr::Lambda { body, .. } => body.as_ref(),
                 _ => expr,
             };
-            // Clone captured variables so move closure works
+            // Clone or move captured variables
             let mut vars = collect_free_vars(spawn_body);
             vars.sort(); vars.dedup();
             vars.retain(|v| !ctx.fn_params.contains_key(v));
@@ -892,7 +928,15 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             for v in &vars {
                 out.push_str(&pad); out.push_str("    let ");
                 out.push_str(v); out.push_str(" = ");
-                out.push_str(v); out.push_str(".clone();\n");
+                // Check if variable is Copy or Move
+                let var_type = ctx.var_types.borrow().get(v).cloned().unwrap_or_default();
+                if is_copy_type(&var_type) {
+                    // Copy types: clone
+                    out.push_str(v); out.push_str(".clone();\n");
+                } else {
+                    // Move types: just move (Rust does this automatically)
+                    out.push_str(v); out.push_str(";\n");
+                }
             }
             out.push_str(&pad); out.push_str("    tokio::spawn(async move {\n");
             out.push_str(&pad); out.push_str("        ");
