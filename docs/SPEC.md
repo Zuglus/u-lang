@@ -1,5 +1,10 @@
 # U-lang Specification
 
+**Версия:** 0.2.0  
+**Дата:** 2026-04-05
+
+---
+
 ## Архитектурные решения
 
 ### Конкурентность: Горутины со stack-only памятью
@@ -20,7 +25,7 @@
 ```
 Stack: 500 KB максимум (растёт от 2 KB до 500 KB)
 Heap:  Нет ❌
-Total: ≤ 500 KB — runtime проверка (stack overflow)
+Total: ≤ 500 KB — compile-time проверка
 ```
 
 **Почему stack-only:**
@@ -29,42 +34,103 @@ Total: ≤ 500 KB — runtime проверка (stack overflow)
 - Нет фрагментации
 - Автоматическое освобождение при return
 
-**Модели памяти:**
+---
 
-| Размер | Модель | Когда |
-|--------|--------|-------|
-| ≤ 64 bytes | Copy | Всегда |
-| 64 bytes — 500 KB | Move (stack) | Внутри горутины |
-| > 500 KB | Невозможно | Compile-time error или runtime stack overflow |
+## Модель памяти
 
-**Большие данные:**
+### Copy vs Move семантика
 
-Если данные > 500 KB — их нельзя обработать в одной горутине.
+| Тип | Размер | Семантика | Примеры |
+|-----|--------|-----------|---------|
+| Примитивы | ≤ 64 bytes | **Copy** | Int, Float, Bool |
+| Структуры | ≤ 64 bytes | **Copy** | Малые struct |
+| Структуры | 64-500 KB | **Move** | Большие struct |
+| String, List | Dynamic | **Move** | heap-allocated |
+| > 500 KB | — | **Error** | Compile-time ошибка |
+
+### Copy типы
 
 ```u
-# ❌ Ошибка: data > 500 KB, не влезет в stack
-fn process_big(data: HugeStruct)  # HugeStruct = 2 MB
-    ...
-end
-
-# ✅ Решение: разбиваем на чанки ≤ 500 KB
-fn process_chunk(chunk: Chunk)    # Chunk = 400 KB
-    ...
-end
-
-# ✅ Решение: несколько горутин обрабатывают части
-for part in split_big_data(big_data, chunk_size: 400000)
-    spawn(fn() process_chunk(part))
-end
+# Эти типы копируются (не муваются)
+x = 42
+spawn(fn() process(x))  # x скопирован
+print(x)                # ✅ x доступен — Int копируется
 ```
 
-### Channels
+### Move типы
 
-**API:**
+```u
+# Эти типы перемещаются
+msg = "Hello"
+spawn(fn() process(msg))  # msg перемещён
+print(msg)                # ❌ Ошибка: использование перемещённой переменной
+```
+
+### Compile-time проверка размеров
+
+```u
+# ❌ Ошибка компиляции: структура слишком большая
+struct TooBig
+    # 65000 полей Int = 520000 bytes > 500 KB
+    f0: Int, f1: Int, f2: Int, ...
+end
+
+# Результат:
+# ошибка: структура 'TooBig' слишком большая (520000 байт > 500 KB лимит)
+#   = help: разбейте на части ≤ 500 KB или используйте каналы
+```
+
+---
+
+## Ownership и Borrowing
+
+### Правила владения
+
+1. **Владение:** Каждое значение имеет одного владельца
+2. **Move:** При передаче в spawn или функцию значение перемещается
+3. **Copy:** Малые примитивы копируются вместо move
+4. **Use-after-move:** Compile-time ошибка
+
+### Примеры ошибок
+
+```u
+fn process(data: String)
+    print(data)
+end
+
+data = "Hello"
+spawn(fn() process(data))  # data перемещён
+print(data)                # ❌ Ошибка компиляции
+
+# ошибка: использование перемещённой переменной 'data'
+#   --> строка 7
+#   = перемещена в 'spawn' на строке 6
+#   = help: переменная недоступна после move
+```
+
+### Корректное использование
+
+```u
+# Для Copy типов — используем как хотим
+x = 42
+spawn(fn() calc(x))
+y = x + 1       # ✅ OK: Int копируется
+
+# Для Move типов — передаём ownership
+ch = channel_new()
+spawn(fn() sender(ch))  # ch перемещён
+# ch недоступен здесь — это правильно
+```
+
+---
+
+## Channels
+
+### API
 
 ```u
 # Создание канала
-ch = Channel.new()
+ch = channel_new()
 
 # Отправка данных (move semantics)
 ch.send(value)
@@ -73,36 +139,42 @@ ch.send(value)
 result = ch.receive()
 ```
 
-**Пример:**
+### Пример
 
 ```u
-ch = Channel.new()
+fn worker(id: Int, ch: Channel)
+    ch.send(id * 2)
+end
 
-spawn(fn()
-    data = compute()
-    ch.send(data)
-end)
+ch = channel_new()
 
-result = ch.receive()
-print("Result: $result")
+spawn(fn() worker(1, ch))
+spawn(fn() worker(2, ch))
+
+result1 = ch.receive()  # 2
+result2 = ch.receive()  # 4
 ```
 
-**Генерация в Rust:**
+### Генерация в Rust
 
 ```rust
-// Channel.new()
-let ch = { let (tx, rx) = tokio::sync::mpsc::channel(100); (tx, rx) };
+// Создание
+let ch = u_runtime::async_int_channel::AsyncIntChannel.new();
 
-// ch.send(data)
-{ let (tx, _) = ch; tx.send(data).await.unwrap() }
+// Отправка (async)
+ch.send(42);
 
-// ch.receive()
-{ let (_, rx) = ch; rx.recv().await.unwrap() }
+// Получение (async)
+let result = ch.recv().await;
 ```
 
-**Важно:** При send/receive данные копируются между стеками (не shared memory).
+**Важно:** Данные копируются между стеками горутин (не shared memory).
 
-### Being/Nothing
+---
+
+## Being/Nothing
+
+### Определение
 
 ```u
 enum Maybe[T]
@@ -111,40 +183,92 @@ enum Maybe[T]
 end
 ```
 
-**Phantom[T]:** zero-sized тип, несёт информацию о T в compile-time.
+### Phantom[T]
 
-**Пример:**
+Zero-sized тип — несёт информацию о T в compile-time, runtime размер = 0.
+
 ```u
 fn divide(a: Int, b: Int) -> Maybe[Int]
     if b == 0
-        return Nothing(phantom: Phantom[Int])  # Ничто от Int
+        return Nothing(phantom: Phantom[Int])
     end
     return Being(value: a / b)
 end
+
+result = divide(10, 2)
+match result
+    Being(value) => print("Result: $value")
+    Nothing(_)    => print("Division by zero")
+end
 ```
+
+---
+
+## Ограничения
 
 ### Запрещено
 
-- Heap allocation (нет `new`, `malloc`)
-- Shared mutable state между горутинами
-- Global variables
-- Указатели между горутинами
-- Данные > 500 KB в одной горутине
+- ❌ Heap allocation (нет `new`, `malloc`)
+- ❌ Shared mutable state между горутинами
+- ❌ Global variables
+- ❌ Указатели между горутинами
+- ❌ Данные > 500 KB в одной горутине
+- ❌ Use-after-move (compile-time ошибка)
 
 ### Разрешено
 
-- Stack allocation только
-- Message passing через channels (copy между стеками)
-- Immutable shared (read-only через copy)
-- Spawn горутин с автоматическим клонированием captured variables
+- ✅ Stack allocation только
+- ✅ Message passing через channels
+- ✅ Immutable shared (read-only)
+- ✅ Copy для малых типов (≤ 64 bytes)
+- ✅ Move для больших типов (> 64 bytes)
 
-### Следующие шаги
+---
 
-- [ ] Реализовать compile-time проверку размера типов (≤ 500 KB)
-- [ ] Протестировать channels с реальным runtime
-- [ ] Добавить try_receive() → Maybe[T]
-- [ ] Реализовать растущий стек (2 KB → 500 KB)
-- [ ] Runtime проверка stack overflow
+## Работа с большими данными
+
+### Chunking (разбиение на части)
+
+```u
+# Если данные > 500 KB — разбиваем на чанки
+fn process_big_dataset()
+    # Данные разбиты на части ≤ 500 KB
+    chunks = load_chunks("huge_file.bin", max_size: 400000)
+    
+    for chunk in chunks
+        spawn(fn() process_chunk(chunk))
+    end
+end
+```
+
+### Pipeline
+
+```u
+fn pipeline()
+    ch1 = channel_new()
+    ch2 = channel_new()
+    
+    # Stage 1: чтение
+    spawn(fn() 
+        for record in read_data()
+            ch1.send(record)
+        end
+    end)
+    
+    # Stage 2: обработка
+    spawn(fn()
+        for record in ch1.receive_iter()
+            processed = transform(record)
+            ch2.send(processed)
+        end
+    end)
+    
+    # Stage 3: вывод
+    for result in ch2.receive_iter()
+        print(result)
+    end
+end
+```
 
 ---
 
@@ -155,13 +279,16 @@ end
 - Being/Nothing с дженериками
 - Spawn (горутины через tokio::spawn)
 - Channel.new(), .send(), .receive()
+- Compile-time проверка 500 KB limit
+- Use-after-move detection
+- Copy/Move семантика в кодогенерации
 
 🚧 **В работе:**
-- Compile-time проверка 500 KB limit
-- Тестирование с реальным runtime
-- Растущий стек
+- try_receive() → Maybe[T]
+- select (множественный receive)
+- Растущий стек (2 KB → 500 KB)
 
 📋 **Запланировано:**
-- try_receive() → Maybe[T]
 - Worker pools
 - Bounded channels с backpressure
+- Таймауты для операций
