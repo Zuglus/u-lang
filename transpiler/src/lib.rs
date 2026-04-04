@@ -6,3 +6,4 @@ pub mod generator;
 pub mod parser;
 pub mod type_checker;
 pub mod size_checker;
+pub mod ownership;
