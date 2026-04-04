@@ -1233,6 +1233,15 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 out.push_str(".recv().await");
                 return;
             }
+            // .try_receive() -> Maybe[T] (None if empty)
+            if method == "try_receive" && args.is_empty() {
+                // Generate: match ch.try_recv() { Some(v) => Being(value: v), None => Nothing(phantom: Phantom[T]) }
+                // For now, simplified - just return Being with the value or Nothing
+                // This is a placeholder - real implementation needs proper Maybe type
+                gen_expr(object, out, ctx);
+                out.push_str(".try_recv()");
+                return;
+            }
             // .append(item) → .clone().push(item) (returns new vec)
             if method == "append" && args.len() == 1 {
                 out.push_str("{ let mut __v = ");

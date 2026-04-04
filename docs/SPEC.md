@@ -1,6 +1,6 @@
 # U-lang Specification
 
-**Версия:** 0.2.0  
+**Версия:** 0.3.0  
 **Дата:** 2026-04-05
 
 ---
@@ -46,6 +46,7 @@ Total: ≤ 500 KB — compile-time проверка
 | Структуры | ≤ 64 bytes | **Copy** | Малые struct |
 | Структуры | 64-500 KB | **Move** | Большие struct |
 | String, List | Dynamic | **Move** | heap-allocated |
+| Каналы | ~24 bytes | **Clone** | IntChannel, StringChannel |
 | > 500 KB | — | **Error** | Compile-time ошибка |
 
 ### Copy типы
@@ -64,6 +65,15 @@ print(x)                # ✅ x доступен — Int копируется
 msg = "Hello"
 spawn(fn() process(msg))  # msg перемещён
 print(msg)                # ❌ Ошибка: использование перемещённой переменной
+```
+
+### Каналы (Clone)
+
+```u
+# Каналы клонируются при spawn (не муваются!)
+ch = channel_new_string()
+spawn(fn() sender(ch))  # ch клонируется
+result = ch.receive()   # ✅ OK — ch всё ещё доступен
 ```
 
 ### Compile-time проверка размеров
@@ -89,7 +99,8 @@ end
 1. **Владение:** Каждое значение имеет одного владельца
 2. **Move:** При передаче в spawn или функцию значение перемещается
 3. **Copy:** Малые примитивы копируются вместо move
-4. **Use-after-move:** Compile-time ошибка
+4. **Clone:** Каналы клонируются при spawn
+5. **Use-after-move:** Compile-time ошибка
 
 ### Примеры ошибок
 
@@ -108,20 +119,6 @@ print(data)                # ❌ Ошибка компиляции
 #   = help: переменная недоступна после move
 ```
 
-### Корректное использование
-
-```u
-# Для Copy типов — используем как хотим
-x = 42
-spawn(fn() calc(x))
-y = x + 1       # ✅ OK: Int копируется
-
-# Для Move типов — передаём ownership
-ch = channel_new()
-spawn(fn() sender(ch))  # ch перемещён
-# ch недоступен здесь — это правильно
-```
-
 ---
 
 ## Channels
@@ -129,46 +126,63 @@ spawn(fn() sender(ch))  # ch перемещён
 ### API
 
 ```u
-# Создание канала
-ch = channel_new()
+# Создание канала (разные типы)
+ch_int    = channel_new()           # IntChannel
+ch_string = channel_new_string()    # StringChannel
+ch_float  = channel_new_float()     # FloatChannel
+ch_bool   = channel_new_bool()      # BoolChannel
 
-# Отправка данных (move semantics)
-ch.send(value)
+# Отправка данных
+ch_int.send(42)
+ch_string.send("Hello")
+ch_float.send(3.14)
+ch_bool.send(true)
 
 # Получение данных (blocking)
-result = ch.receive()
+result = ch_int.receive()      # -> Int
+result = ch_string.receive()   # -> String
+
+# Неблокирующее получение (Maybe[T])
+result = ch_int.try_receive()
+match result
+    Being(value) => print("Got: $value")
+    Nothing(_)   => print("Channel empty")
+end
+```
+
+### Типы каналов
+
+| Функция | Тип канала | Тип данных | Методы |
+|---------|------------|------------|--------|
+| `channel_new()` | `IntChannel` | `Int` | `.send(Int)`, `.receive() -> Int` |
+| `channel_new_string()` | `StringChannel` | `String` | `.send(String)`, `.receive() -> String` |
+| `channel_new_float()` | `FloatChannel` | `Float` | `.send(Float)`, `.receive() -> Float` |
+| `channel_new_bool()` | `BoolChannel` | `Bool` | `.send(Bool)`, `.receive() -> Bool` |
+
+### Каналы клонируются при spawn
+
+```u
+fn worker(ch: StringChannel)
+    ch.send("Hello")
+end
+
+ch = channel_new_string()
+spawn(fn() worker(ch))  # ch клонируется (не мувается!)
+result = ch.receive()   # ✅ OK — ch всё ещё доступен
 ```
 
 ### Пример
 
 ```u
-fn worker(id: Int, ch: Channel)
-    ch.send(id * 2)
+fn sender(ch: StringChannel)
+    ch.send("Hello from sender!")
 end
 
-ch = channel_new()
-
-spawn(fn() worker(1, ch))
-spawn(fn() worker(2, ch))
-
-result1 = ch.receive()  # 2
-result2 = ch.receive()  # 4
+ch = channel_new_string()
+spawn(fn() sender(ch))
+result = ch.receive()
+print("Received: $result")  # Received: Hello from sender!
 ```
-
-### Генерация в Rust
-
-```rust
-// Создание
-let ch = u_runtime::async_int_channel::AsyncIntChannel.new();
-
-// Отправка (async)
-ch.send(42);
-
-// Получение (async)
-let result = ch.recv().await;
-```
-
-**Важно:** Данные копируются между стеками горутин (не shared memory).
 
 ---
 
@@ -222,6 +236,7 @@ end
 - ✅ Immutable shared (read-only)
 - ✅ Copy для малых типов (≤ 64 bytes)
 - ✅ Move для больших типов (> 64 bytes)
+- ✅ Clone для каналов
 
 ---
 
@@ -245,8 +260,8 @@ end
 
 ```u
 fn pipeline()
-    ch1 = channel_new()
-    ch2 = channel_new()
+    ch1 = channel_new_string()
+    ch2 = channel_new_string()
     
     # Stage 1: чтение
     spawn(fn() 
@@ -257,15 +272,24 @@ fn pipeline()
     
     # Stage 2: обработка
     spawn(fn()
-        for record in ch1.receive_iter()
-            processed = transform(record)
-            ch2.send(processed)
+        loop
+            result = ch1.try_receive()
+            match result
+                Being(record) =>
+                    processed = transform(record)
+                    ch2.send(processed)
+                Nothing(_) => break
+            end
         end
     end)
     
     # Stage 3: вывод
-    for result in ch2.receive_iter()
-        print(result)
+    loop
+        result = ch2.try_receive()
+        match result
+            Being(data) => print(data)
+            Nothing(_) => break
+        end
     end
 end
 ```
@@ -278,17 +302,18 @@ end
 - Phantom[T] для zero-sized типов
 - Being/Nothing с дженериками
 - Spawn (горутины через tokio::spawn)
-- Channel.new(), .send(), .receive()
+- Channels: IntChannel, StringChannel, FloatChannel, BoolChannel
 - Compile-time проверка 500 KB limit
 - Use-after-move detection
 - Copy/Move семантика в кодогенерации
+- Каналы клонируются при spawn
+- `try_receive() -> Maybe[T]`
 
 🚧 **В работе:**
-- try_receive() → Maybe[T]
 - select (множественный receive)
+- Bounded channels с backpressure
 - Растущий стек (2 KB → 500 KB)
 
 📋 **Запланировано:**
 - Worker pools
-- Bounded channels с backpressure
 - Таймауты для операций

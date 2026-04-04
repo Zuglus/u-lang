@@ -103,21 +103,25 @@ impl TypeCtx {
         let mut int_channel_methods = HashMap::new();
         int_channel_methods.insert("send".to_string(), (vec![Type::Int], Type::None));
         int_channel_methods.insert("receive".to_string(), (vec![], Type::Int));
+        int_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
         ctx.methods.insert("IntChannel".to_string(), int_channel_methods);
         
         let mut string_channel_methods = HashMap::new();
         string_channel_methods.insert("send".to_string(), (vec![Type::String], Type::None));
         string_channel_methods.insert("receive".to_string(), (vec![], Type::String));
+        string_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
         ctx.methods.insert("StringChannel".to_string(), string_channel_methods);
         
         let mut float_channel_methods = HashMap::new();
         float_channel_methods.insert("send".to_string(), (vec![Type::Float], Type::None));
         float_channel_methods.insert("receive".to_string(), (vec![], Type::Float));
+        float_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
         ctx.methods.insert("FloatChannel".to_string(), float_channel_methods);
         
         let mut bool_channel_methods = HashMap::new();
         bool_channel_methods.insert("send".to_string(), (vec![Type::Bool], Type::None));
         bool_channel_methods.insert("receive".to_string(), (vec![], Type::Bool));
+        bool_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
         ctx.methods.insert("BoolChannel".to_string(), bool_channel_methods);
         
         // Legacy Channel methods (default to Int)

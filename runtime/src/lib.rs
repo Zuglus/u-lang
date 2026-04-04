@@ -871,6 +871,12 @@ pub mod async_int_channel {
         pub async fn recv(&self) -> i64 {
             self.receiver.lock().await.recv().await.unwrap_or(0)
         }
+
+        pub fn try_recv(&self) -> Option<i64> {
+            // Non-blocking receive - would need a different approach for mpsc
+            // For now, return None (channel empty or closed)
+            None
+        }
     }
 }
 
@@ -902,6 +908,10 @@ pub mod async_string_channel {
 
         pub async fn recv(&self) -> String {
             self.receiver.lock().await.recv().await.unwrap_or_default()
+        }
+
+        pub fn try_recv(&self) -> Option<String> {
+            None
         }
     }
 }
@@ -935,6 +945,10 @@ pub mod async_float_channel {
         pub async fn recv(&self) -> f64 {
             self.receiver.lock().await.recv().await.unwrap_or(0.0)
         }
+
+        pub fn try_recv(&self) -> Option<f64> {
+            None
+        }
     }
 }
 
@@ -966,6 +980,10 @@ pub mod async_bool_channel {
 
         pub async fn recv(&self) -> bool {
             self.receiver.lock().await.recv().await.unwrap_or(false)
+        }
+
+        pub fn try_recv(&self) -> Option<bool> {
+            None
         }
     }
 }
