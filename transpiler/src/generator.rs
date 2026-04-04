@@ -251,7 +251,7 @@ fn map_type(t: &str) -> String {
         "Float" => "f64".to_string(),
         "String" => "String".to_string(),
         "Bool" => "bool".to_string(),
-        "Channel" => "Chan".to_string(),
+        "Channel" => "u_runtime::async_int_channel::AsyncIntChan".to_string(),
         "Response" => "HttpResponse".to_string(),
         o => o.to_string(),
     }
@@ -261,7 +261,7 @@ fn map_param_type(t: &str, structs: &HashSet<String>, is_mut: bool) -> String {
     match t {
         "Int" => "i64".into(), "Float" => "f64".into(), "Bool" => "bool".into(),
         "String" => "&str".into(), "Db" => "&Db".into(),
-        "Channel" => "Chan".into(),
+        "Channel" => "u_runtime::async_int_channel::AsyncIntChan".into(),
         other => {
             if structs.contains(other) {
                 if is_mut { format!("&mut {}", other) } else { format!("&{}", other) }
