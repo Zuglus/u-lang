@@ -807,3 +807,69 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+// Int Channel для U-lang
+pub mod int_channel {
+    use std::sync::mpsc::{channel, Sender, Receiver};
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    /// Unit struct — used as `IntChannel.new()` in U source
+    pub struct IntChannel;
+
+    impl IntChannel {
+        pub fn new(&self) -> IntChan {
+            let (tx, rx) = channel();
+            IntChan { sender: tx, receiver: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    /// The actual int channel value, cloneable across threads
+    #[derive(Clone)]
+    pub struct IntChan {
+        sender: Sender<i64>,
+        receiver: Arc<Mutex<Receiver<i64>>>,
+    }
+
+    impl IntChan {
+        pub fn send(&self, val: i64) {
+            let _ = self.sender.send(val);
+        }
+
+        pub fn recv(&self) -> i64 {
+            self.receiver.lock().unwrap().recv().unwrap_or(0)
+        }
+    }
+}
+
+// Async Int Channel для U-lang с tokio
+pub mod async_int_channel {
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    pub struct AsyncIntChannel;
+
+    impl AsyncIntChannel {
+        pub fn new(&self) -> AsyncIntChan {
+            let (tx, rx) = unbounded_channel::<i64>();
+            AsyncIntChan { sender: tx, receiver: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct AsyncIntChan {
+        sender: UnboundedSender<i64>,
+        receiver: Arc<Mutex<UnboundedReceiver<i64>>>,
+    }
+
+    impl AsyncIntChan {
+        pub fn send(&self, val: i64) {
+            let _ = self.sender.send(val);
+        }
+
+        pub async fn recv(&self) -> i64 {
+            self.receiver.lock().await.recv().await.unwrap_or(0)
+        }
+    }
+}

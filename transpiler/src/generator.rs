@@ -892,12 +892,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             for v in &vars {
                 out.push_str(&pad); out.push_str("    let ");
                 out.push_str(v); out.push_str(" = ");
-                // Для каналов клонируем только Sender (первый элемент кортежа)
-                if v.starts_with("ch") {
-                    out.push_str(v); out.push_str(".0.clone();\n");
-                } else {
-                    out.push_str(v); out.push_str(".clone();\n");
-                }
+                out.push_str(v); out.push_str(".clone();\n");
             }
             out.push_str(&pad); out.push_str("    tokio::spawn(async move {\n");
             out.push_str(&pad); out.push_str("        ");
@@ -1002,9 +997,9 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
-                        // channel_new() -> u_runtime::Channel.new()
+                        // channel_new() -> u_runtime::async_int_channel::AsyncIntChannel.new()
             if name == "channel_new" {
-                out.push_str("u_runtime::Channel.new()");
+                out.push_str("u_runtime::async_int_channel::AsyncIntChannel.new()");
                 return;
             }
             // range(start, end) → range2(start, end)
