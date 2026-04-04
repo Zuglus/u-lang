@@ -227,8 +227,34 @@ fn stmts_access_field_on(param: &str, stmts: &[Stmt]) -> Option<String> {
     None
 }
 
-fn map_type(t: &str) -> &str {
-    match t { "Int" => "i64", "Float" => "f64", "String" => "String", "Bool" => "bool", "Channel" => "Chan", "Response" => "HttpResponse", o => o }
+fn map_type(t: &str) -> String {
+    // Handle generic types like Maybe[Int], List[String], Phantom[T]
+    if let Some(start) = t.find('[') {
+        let end = t.rfind(']').unwrap_or(t.len());
+        let base = &t[..start];
+        let inner = &t[start+1..end];
+        
+        let mapped_base = match base {
+            "Maybe" => "Maybe",
+            "List" => "Vec",
+            "Phantom" => "std::marker::PhantomData",
+            other => other,
+        };
+        
+        let mapped_inner = map_type(inner);
+        return format!("{}<{}>", mapped_base, mapped_inner);
+    }
+    
+    // Simple types
+    match t {
+        "Int" => "i64".to_string(),
+        "Float" => "f64".to_string(),
+        "String" => "String".to_string(),
+        "Bool" => "bool".to_string(),
+        "Channel" => "Chan".to_string(),
+        "Response" => "HttpResponse".to_string(),
+        o => o.to_string(),
+    }
 }
 
 fn map_param_type(t: &str, structs: &HashSet<String>, is_mut: bool) -> String {
@@ -251,7 +277,7 @@ fn is_ref_type(t: &str) -> bool {
 }
 
 fn map_return_type(t: &str, _structs: &HashSet<String>) -> String {
-    map_type(t).to_string()
+    map_type(t)
 }
 
 fn collect_free_vars(expr: &Expr) -> Vec<String> {
@@ -578,31 +604,56 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
     }
     out.push_str(&pad);
     match stmt {
-        Stmt::StructDef { name, fields, is_pub, .. } => {
+        Stmt::StructDef { name, type_params, fields, is_pub, .. } => {
+            // Skip Phantom - we use std::marker::PhantomData directly
+            if name == "Phantom" {
+                return;
+            }
             out.push_str("#[derive(Debug, Clone)]\n");
             if *is_pub { out.push_str(&pad); out.push_str("pub "); } else { out.push_str(&pad); }
             out.push_str("struct ");
             out.push_str(name);
+            if !type_params.is_empty() {
+                out.push('<');
+                for (i, tp) in type_params.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    out.push_str(tp);
+                }
+                out.push('>');
+            }
             out.push_str(" {\n");
             for f in fields {
                 out.push_str(&pad); out.push_str("    ");
                 if *is_pub { out.push_str("pub "); }
-                out.push_str(&f.name); out.push_str(": "); out.push_str(map_type(&f.type_name)); out.push_str(",\n");
+                out.push_str(&f.name); out.push_str(": "); out.push_str(&map_type(&f.type_name)); out.push_str(",\n");
             }
             out.push_str(&pad); out.push_str("}\n");
         }
-        Stmt::TypeDef { name, variants, is_pub, .. } => {
+        Stmt::TypeDef { name, type_params, variants, is_pub, .. } => {
             out.push_str("#[derive(Debug, Clone)]\n");
             if *is_pub { out.push_str(&pad); out.push_str("pub "); } else { out.push_str(&pad); }
             out.push_str("enum ");
-            out.push_str(name); out.push_str(" {\n");
-            for v in variants {
-                out.push_str(&pad); out.push_str("    "); out.push_str(&v.name); out.push('(');
-                for (i, f) in v.fields.iter().enumerate() {
+            out.push_str(name);
+            if !type_params.is_empty() {
+                out.push('<');
+                for (i, tp) in type_params.iter().enumerate() {
                     if i > 0 { out.push_str(", "); }
-                    out.push_str(map_type(&f.type_name));
+                    out.push_str(tp);
                 }
-                out.push_str("),\n");
+                out.push('>');
+            }
+            out.push_str(" {\n");
+            for v in variants {
+                out.push_str(&pad); out.push_str("    "); out.push_str(&v.name);
+                if !v.fields.is_empty() {
+                    out.push('(');
+                    for (i, f) in v.fields.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        out.push_str(&map_type(&f.type_name));
+                    }
+                    out.push(')');
+                }
+                out.push_str(",\n");
             }
             out.push_str(&pad); out.push_str("}\n");
         }
@@ -765,9 +816,15 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                                 out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
                             } else if let Some(en) = ctx.variant_to_enum.get(name) {
                                 out.push_str(en); out.push_str("::");
-                                out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                out.push_str(name);
+                                if !bindings.is_empty() {
+                                    out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                }
                             } else {
-                                out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                out.push_str(name);
+                                if !bindings.is_empty() {
+                                    out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                }
                             }
                         }
                         MatchPattern::StringLit(s) => { out.push('"'); out.push_str(s); out.push('"'); }
@@ -930,7 +987,13 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::BoolLiteral { value, .. } => out.push_str(if *value { "true" } else { "false" }),
         Expr::NoneLiteral { .. } => out.push_str("None"),
-        Expr::Identifier { name, .. } => out.push_str(name),
+        Expr::Identifier { name, .. } => {
+            if let Some(en) = ctx.variant_to_enum.get(name) {
+                out.push_str(en); out.push_str("::"); out.push_str(name);
+            } else {
+                out.push_str(name);
+            }
+        }
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
             // range(start, end) → range2(start, end)
@@ -1196,6 +1259,18 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             gen_expr(expr, out, ctx);
         }
         Expr::Index { object, index, .. } => {
+            // Handle Phantom[T] syntax
+            if let Expr::Identifier { name: obj_name, .. } = object.as_ref() {
+                if obj_name == "Phantom" {
+                    out.push_str("std::marker::PhantomData");
+                    if let Expr::Identifier { name: type_name, .. } = index.as_ref() {
+                        out.push_str("::<");
+                        out.push_str(&map_type(type_name));
+                        out.push_str(">");
+                    }
+                    return;
+                }
+            }
             gen_expr(object, out, ctx);
             out.push_str(".get(");
             gen_expr(index, out, ctx);
@@ -1205,6 +1280,11 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             out.push_str("vec!["); gen_args(elements, out, ctx); out.push(']');
         }
         Expr::StructInit { name, fields, .. } => {
+            // Handle Phantom[T] -> std::marker::PhantomData
+            if name == "Phantom" {
+                out.push_str("std::marker::PhantomData");
+                return;
+            }
             if ctx.structs.contains(name) {
                 out.push_str(name); out.push_str(" { ");
                 for (i, (fname, fval)) in fields.iter().enumerate() {
@@ -1214,12 +1294,15 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 }
                 out.push_str(" }");
             } else if let Some(en) = ctx.variant_to_enum.get(name) {
-                out.push_str(en); out.push_str("::"); out.push_str(name); out.push('(');
-                for (i, (_, fval)) in fields.iter().enumerate() {
-                    if i > 0 { out.push_str(", "); }
-                    gen_expr(fval, out, ctx);
+                out.push_str(en); out.push_str("::"); out.push_str(name);
+                if !fields.is_empty() {
+                    out.push('(');
+                    for (i, (_, fval)) in fields.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        gen_expr(fval, out, ctx);
+                    }
+                    out.push(')');
                 }
-                out.push(')');
             } else {
                 out.push_str(name); out.push('('); gen_args(&fields.iter().map(|(_, v)| v).cloned().collect::<Vec<_>>(), out, ctx); out.push(')');
             }

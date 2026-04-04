@@ -155,27 +155,37 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
         }
         Rule::struct_def => {
             let s = span(inner.as_span());
-            let mut p = meaningful(inner.into_inner());
+            let mut p = meaningful(inner.into_inner()).peekable();
             let name = p.next().unwrap().as_str().to_string();
+            let type_params = if let Some(tp) = p.peek() {
+                if tp.as_rule() == Rule::type_params {
+                    p.next().unwrap().into_inner().filter(|x| x.as_rule() == Rule::identifier).map(|id| id.as_str().to_string()).collect()
+                } else { Vec::new() }
+            } else { Vec::new() };
             let fields = p.filter(|x| x.as_rule() == Rule::typed_field).map(|tf| {
                 let mut fi = tf.into_inner();
                 TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
             }).collect();
-            Ok(Stmt::StructDef { name, fields, is_pub: false, span: s })
+            Ok(Stmt::StructDef { name, type_params, fields, is_pub: false, span: s })
         }
         Rule::pub_struct_def => {
             let s = span(inner.as_span());
             let struct_pair = inner.into_inner().find(|p| p.as_rule() == Rule::struct_def).unwrap();
             match build_stmt_inner(struct_pair)? {
-                Stmt::StructDef { name, fields, .. } =>
-                    Ok(Stmt::StructDef { name, fields, is_pub: true, span: s }),
+                Stmt::StructDef { name, type_params, fields, .. } =>
+                    Ok(Stmt::StructDef { name, type_params, fields, is_pub: true, span: s }),
                 _ => unreachable!(),
             }
         }
         Rule::type_def => {
             let s = span(inner.as_span());
-            let mut p = meaningful(inner.into_inner());
+            let mut p = meaningful(inner.into_inner()).peekable();
             let name = p.next().unwrap().as_str().to_string();
+            let type_params = if let Some(tp) = p.peek() {
+                if tp.as_rule() == Rule::type_params {
+                    p.next().unwrap().into_inner().filter(|x| x.as_rule() == Rule::identifier).map(|id| id.as_str().to_string()).collect()
+                } else { Vec::new() }
+            } else { Vec::new() };
             let variants = p.filter(|x| x.as_rule() == Rule::type_variant).map(|vp| {
                 let mut vi = vp.into_inner();
                 let vname = vi.next().unwrap().as_str().to_string();
@@ -185,14 +195,14 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                 }).collect();
                 Variant { name: vname, fields }
             }).collect();
-            Ok(Stmt::TypeDef { name, variants, is_pub: false, span: s })
+            Ok(Stmt::TypeDef { name, type_params, variants, is_pub: false, span: s })
         }
         Rule::pub_type_def => {
             let s = span(inner.as_span());
             let type_pair = inner.into_inner().find(|p| p.as_rule() == Rule::type_def).unwrap();
             match build_stmt_inner(type_pair)? {
-                Stmt::TypeDef { name, variants, .. } =>
-                    Ok(Stmt::TypeDef { name, variants, is_pub: true, span: s }),
+                Stmt::TypeDef { name, type_params, variants, .. } =>
+                    Ok(Stmt::TypeDef { name, type_params, variants, is_pub: true, span: s }),
                 _ => unreachable!(),
             }
         }

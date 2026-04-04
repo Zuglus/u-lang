@@ -16,8 +16,9 @@ use_stmt    = { use_kw ~ use_path ~ ":" ~ use_items }
 use_path    = @{ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_" | ".")* }
 use_items   = { identifier ~ ("," ~ identifier)* }
 
-struct_def  = { struct_kw ~ identifier ~ NEWLINE+ ~ (typed_field ~ NEWLINE+)* ~ end_kw }
-type_def    = { enum_kw ~ identifier ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
+struct_def  = { struct_kw ~ identifier ~ type_params? ~ NEWLINE+ ~ (typed_field ~ NEWLINE+)* ~ end_kw }
+type_def    = { enum_kw ~ identifier ~ type_params? ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
+type_params = { "[" ~ identifier ~ ("," ~ identifier)* ~ "]" }
 trait_def        = { trait_kw ~ identifier ~ NEWLINE+ ~ (trait_method_sig ~ NEWLINE+)* ~ end_kw }
 trait_method_sig = { fn_kw ~ identifier ~ "(" ~ fn_params? ~ ")" ~ fn_ret? }
 impl_block       = { impl_kw ~ identifier ~ (for_kw ~ identifier)? ~ NEWLINE+ ~ (fn_def ~ NEWLINE+)* ~ end_kw }
@@ -39,11 +40,12 @@ expr_stmt   = { expression }
 fn_params = { fn_param ~ ("," ~ fn_param)* }
 fn_param   = { mut_marker? ~ identifier ~ (":" ~ identifier)? }
 mut_marker = { mut_kw }
-fn_ret    = { "->" ~ identifier }
+fn_ret    = { "->" ~ type_name }
+type_name = @{ identifier ~ ("[" ~ type_name ~ ("," ~ type_name)* ~ "]")? }
 
 // Struct / type fields
-typed_field  = { identifier ~ ":" ~ identifier }
-type_variant = { identifier ~ "(" ~ typed_field ~ ("," ~ typed_field)* ~ ")" }
+typed_field  = { identifier ~ ":" ~ type_name }
+type_variant = { identifier ~ ("(" ~ (typed_field ~ ("," ~ typed_field)*)? ~ ")")? }
 
 // Match — supports variant, string, list patterns, and wildcard
 match_arm       = { match_pattern ~ "=>" ~ match_arm_body }
@@ -52,7 +54,7 @@ list_pattern    = { list_empty | list_single | list_cons }
 list_empty      = { "[" ~ "]" }
 list_single     = { "[" ~ identifier ~ "]" }
 list_cons       = { "[" ~ identifier ~ "," ~ ".." ~ identifier ~ "]" }
-variant_pattern = { none_literal | none_cap_pattern | identifier ~ "(" ~ match_bindings? ~ ")" }
+variant_pattern = { none_literal | none_cap_pattern | identifier ~ ("(" ~ match_bindings? ~ ")")? }
 none_literal    = @{ "none" ~ !(LETTER | ASCII_DIGIT | "_") }
 none_cap_pattern = @{ "None" ~ !(LETTER | ASCII_DIGIT | "_") }
 match_bindings  = { identifier ~ ("," ~ identifier)* }

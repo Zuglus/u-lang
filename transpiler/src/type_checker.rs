@@ -27,6 +27,8 @@ pub struct TypeCtx {
     /// Enum → варианты
     #[allow(dead_code)]
     enums: HashMap<String, Vec<(String, Vec<Type>)>>,
+    /// Вариант enum → имя enum (для unit-вариантов)
+    variant_to_enum: HashMap<String, String>,
     /// Методы типов → (имя метода → (параметры, возврат))
     methods: HashMap<String, HashMap<String, (Vec<Type>, Type)>>,
 }
@@ -38,8 +40,13 @@ impl TypeCtx {
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
+            variant_to_enum: HashMap::new(),
             methods: HashMap::new(),
         };
+        // Встроенная структура Phantom[T]
+        let phantom_fields = HashMap::new();
+        ctx.structs.insert("Phantom".to_string(), phantom_fields);
+        
         // Встроенные функции
         ctx.functions.insert(
             "print".to_string(),
@@ -164,13 +171,20 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
         Expr::NoneLiteral { .. } => Ok(Type::None),
         
         Expr::Identifier { name, span } => {
-            ctx.get_var(name)
-                .ok_or_else(|| TypeError {
-                    message: format!("Неизвестная переменная: {}", name),
-                    span: span.clone(),
-                    context: None,
-                    help: None,
-                })
+            // Сначала проверяем переменные
+            if let Some(ty) = ctx.get_var(name) {
+                return Ok(ty.clone());
+            }
+            // Проверяем unit-варианты enum
+            if let Some(enum_name) = ctx.variant_to_enum.get(name) {
+                return Ok(Type::Enum(enum_name.clone()));
+            }
+            Err(TypeError {
+                message: format!("Неизвестная переменная: {}", name),
+                span: span.clone(),
+                context: None,
+                help: None,
+            })
         }
         
         Expr::BinaryOp { left, op, right, span } => {
@@ -400,6 +414,10 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
         }
         
         Expr::StructInit { name, .. } => {
+            // Специальная обработка для Phantom[T]
+            if name == "Phantom" {
+                return Ok(Type::Struct("Phantom".to_string()));
+            }
             // Проверить, является ли это enum вариантом
             for (enum_name, variants) in &ctx.enums {
                 if variants.iter().any(|(v, _)| v == name) {
@@ -408,6 +426,16 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
             }
             // Иначе это структура
             Ok(Type::Struct(name.clone()))
+        }
+        
+        Expr::Index { object, .. } => {
+            // Handle Phantom[T] -> Phantom type
+            if let Expr::Identifier { name: obj_name, .. } = object.as_ref() {
+                if obj_name == "Phantom" {
+                    return Ok(Type::Struct("Phantom".to_string()));
+                }
+            }
+            Ok(Type::Unknown)
         }
         
         _ => Ok(Type::Unknown), // Пока не реализовано
@@ -439,7 +467,13 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
                 let enum_variants: Vec<(String, Vec<Type>)> = variants.iter()
                     .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name)).collect()))
                     .collect();
-                ctx.enums.insert(name.clone(), enum_variants);
+                ctx.enums.insert(name.clone(), enum_variants.clone());
+                // Регистрируем unit-варианты (без полей) для поиска по имени
+                for (variant_name, fields) in &enum_variants {
+                    if fields.is_empty() {
+                        ctx.variant_to_enum.insert(variant_name.clone(), name.clone());
+                    }
+                }
             }
             _ => {}
         }

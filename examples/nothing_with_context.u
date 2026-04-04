@@ -1,0 +1,23 @@
+struct DivisionError
+    a: Int
+    b: Int
+end
+
+enum Maybe[T]
+    Being(value: T)
+    Nothing(error: DivisionError)
+end
+
+fn divide(a: Int, b: Int) -> Maybe[Int]
+    if b == 0
+        return Nothing(error: DivisionError(a: a, b: b))
+    end
+    return Being(value: a / b)
+end
+
+result = divide(10, 0)
+
+match result
+    Being(v) => print("Being: $v")
+    Nothing(err) => print("Ничто: деление на ноль")
+end
