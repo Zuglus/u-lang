@@ -1002,9 +1002,9 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
-            // channel_new() -> std::sync::mpsc::channel()
+                        // channel_new() -> u_runtime::Channel.new()
             if name == "channel_new" {
-                out.push_str("{ let (tx, rx) = std::sync::mpsc::channel(); (tx, rx) }");
+                out.push_str("u_runtime::Channel.new()");
                 return;
             }
             // range(start, end) → range2(start, end)
@@ -1139,22 +1139,19 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 out.push_str(".is_empty()");
                 return;
             }
-            // Channel methods: .send() and .receive()
-            // Channel is (Sender<T>, Receiver<T>) tuple
-            // .send(data) → tx.send(data).await.unwrap()
+            // Channel methods: .send() and .receive() for u_runtime::Chan
+            // .send(data) -> ch.send(data)
             if method == "send" && args.len() == 1 {
-                out.push_str("{ let (tx, _) = ");
                 gen_expr(object, out, ctx);
-                out.push_str("; tx.send(");
+                out.push_str(".send(");
                 gen_expr(&args[0], out, ctx);
-                out.push_str(").unwrap() }");
+                out.push_str(")");
                 return;
             }
-            // .receive() → rx.recv().await.unwrap()
+            // .receive() -> ch.recv().await
             if method == "receive" && args.is_empty() {
-                out.push_str("{ let (_, rx) = ");
                 gen_expr(object, out, ctx);
-                out.push_str("; rx.recv().unwrap() }");
+                out.push_str(".recv().await");
                 return;
             }
             // .append(item) → .clone().push(item) (returns new vec)
