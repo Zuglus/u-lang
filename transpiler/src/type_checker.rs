@@ -137,6 +137,16 @@ impl TypeCtx {
     pub fn exit_block(&mut self) {
         self.vars.pop();
     }
+
+    /// Получить поля структуры
+    pub fn get_struct(&self, name: &str) -> Option<&HashMap<String, Type>> {
+        self.structs.get(name)
+    }
+
+    /// Получить варианты enum
+    pub fn get_enum(&self, name: &str) -> Option<&Vec<(String, Vec<Type>)>> {
+        self.enums.get(name)
+    }
 }
 
 /// Результат проверки типа
