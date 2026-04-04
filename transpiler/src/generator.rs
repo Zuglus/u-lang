@@ -996,6 +996,11 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
+            // Channel.new() → tokio::sync::mpsc::channel(100)
+            if name == "Channel.new" {
+                out.push_str("{ let (tx, rx) = tokio::sync::mpsc::channel(100); (tx, rx) }");
+                return;
+            }
             // range(start, end) → range2(start, end)
             let fn_name = if name == "range" && args.len() == 2 { "range2" } else { name.as_str() };
             out.push_str(fn_name); out.push('(');
@@ -1126,6 +1131,24 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             if method == "is_empty" && args.is_empty() {
                 gen_expr(object, out, ctx);
                 out.push_str(".is_empty()");
+                return;
+            }
+            // Channel methods: .send() and .receive()
+            // Channel is (Sender<T>, Receiver<T>) tuple
+            // .send(data) → tx.send(data).await.unwrap()
+            if method == "send" && args.len() == 1 {
+                out.push_str("{ let (tx, _) = ");
+                gen_expr(object, out, ctx);
+                out.push_str("; tx.send(");
+                gen_expr(&args[0], out, ctx);
+                out.push_str(").await.unwrap() }");
+                return;
+            }
+            // .receive() → rx.recv().await.unwrap()
+            if method == "receive" && args.is_empty() {
+                out.push_str("{ let (_, rx) = ");
+                gen_expr(object, out, ctx);
+                out.push_str("; rx.recv().await.unwrap() }");
                 return;
             }
             // .append(item) → .clone().push(item) (returns new vec)

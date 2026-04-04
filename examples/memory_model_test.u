@@ -1,0 +1,17 @@
+struct Counter
+    value: Int
+end
+
+x = Counter(value: 0)
+print("1. Created x with value 0")
+
+x.value = 5
+print("2. Mutated x.value to 5")
+
+y = x
+print("3. Assigned y = x")
+
+y.value = 10
+print("4. Mutated y.value to 10")
+
+print("5. Done")

@@ -91,6 +91,19 @@ impl TypeCtx {
         float_methods.insert("abs".to_string(), (vec![], Type::Float));
         ctx.methods.insert("Float".to_string(), float_methods);
         
+        // Встроенный тип Channel[T]
+        let mut channel_methods = HashMap::new();
+        channel_methods.insert("send".to_string(), (vec![Type::Unknown], Type::None)); // Channel[T].send(T)
+        channel_methods.insert("receive".to_string(), (vec![], Type::Unknown)); // -> T
+        channel_methods.insert("try_receive".to_string(), (vec![], Type::Unknown)); // -> Maybe[T]
+        ctx.methods.insert("Channel".to_string(), channel_methods);
+        
+        // Встроенная функция Channel.new()
+        ctx.functions.insert(
+            "Channel.new".to_string(),
+            (vec![], Type::Struct("Channel".to_string())),
+        );
+        
         ctx
     }
 
