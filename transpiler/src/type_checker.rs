@@ -13,6 +13,7 @@ pub enum Type {
     Struct(String),
     Enum(String),
     Function(Vec<Type>, Box<Type>), // параметры, возврат
+    Channel(Box<Type>),             // Channel[T] - канал с типом элемента
     Unknown,
 }
 
@@ -47,9 +48,12 @@ impl TypeCtx {
         let phantom_fields = HashMap::new();
         ctx.structs.insert("Phantom".to_string(), phantom_fields);
         
-        // Встроенная структура Channel (без полей, только для типизации)
-        let channel_fields = HashMap::new();
-        ctx.structs.insert("Channel".to_string(), channel_fields);
+        // Встроенные структуры каналов (без полей, только для типизации)
+        ctx.structs.insert("IntChannel".to_string(), HashMap::new());
+        ctx.structs.insert("StringChannel".to_string(), HashMap::new());
+        ctx.structs.insert("FloatChannel".to_string(), HashMap::new());
+        ctx.structs.insert("BoolChannel".to_string(), HashMap::new());
+        ctx.structs.insert("Channel".to_string(), HashMap::new());
         
         // Встроенные функции
         ctx.functions.insert(
@@ -95,17 +99,52 @@ impl TypeCtx {
         float_methods.insert("abs".to_string(), (vec![], Type::Float));
         ctx.methods.insert("Float".to_string(), float_methods);
         
-        // Встроенный тип Channel[T]
+        // Встроенные типы каналов для разных типов данных
+        let mut int_channel_methods = HashMap::new();
+        int_channel_methods.insert("send".to_string(), (vec![Type::Int], Type::None));
+        int_channel_methods.insert("receive".to_string(), (vec![], Type::Int));
+        ctx.methods.insert("IntChannel".to_string(), int_channel_methods);
+        
+        let mut string_channel_methods = HashMap::new();
+        string_channel_methods.insert("send".to_string(), (vec![Type::String], Type::None));
+        string_channel_methods.insert("receive".to_string(), (vec![], Type::String));
+        ctx.methods.insert("StringChannel".to_string(), string_channel_methods);
+        
+        let mut float_channel_methods = HashMap::new();
+        float_channel_methods.insert("send".to_string(), (vec![Type::Float], Type::None));
+        float_channel_methods.insert("receive".to_string(), (vec![], Type::Float));
+        ctx.methods.insert("FloatChannel".to_string(), float_channel_methods);
+        
+        let mut bool_channel_methods = HashMap::new();
+        bool_channel_methods.insert("send".to_string(), (vec![Type::Bool], Type::None));
+        bool_channel_methods.insert("receive".to_string(), (vec![], Type::Bool));
+        ctx.methods.insert("BoolChannel".to_string(), bool_channel_methods);
+        
+        // Legacy Channel methods (default to Int)
         let mut channel_methods = HashMap::new();
-        channel_methods.insert("send".to_string(), (vec![Type::Int], Type::None)); // Channel[Int].send(Int)
-        channel_methods.insert("receive".to_string(), (vec![], Type::Int)); // -> Int
-        channel_methods.insert("try_receive".to_string(), (vec![], Type::Int)); // -> Maybe[Int]
+        channel_methods.insert("send".to_string(), (vec![Type::Int], Type::None));
+        channel_methods.insert("receive".to_string(), (vec![], Type::Int));
+        channel_methods.insert("try_receive".to_string(), (vec![], Type::Int));
         ctx.methods.insert("Channel".to_string(), channel_methods);
         
-        // Встроенная функция channel_new() -> Channel
+        // Встроенная функция channel_new() -> IntChannel
         ctx.functions.insert(
             "channel_new".to_string(),
-            (vec![], Type::Struct("Channel".to_string())),
+            (vec![], Type::Struct("IntChannel".to_string())),
+        );
+        
+        // Дополнительные функции для других типов каналов
+        ctx.functions.insert(
+            "channel_new_string".to_string(),
+            (vec![], Type::Struct("StringChannel".to_string())),
+        );
+        ctx.functions.insert(
+            "channel_new_float".to_string(),
+            (vec![], Type::Struct("FloatChannel".to_string())),
+        );
+        ctx.functions.insert(
+            "channel_new_bool".to_string(),
+            (vec![], Type::Struct("BoolChannel".to_string())),
         );
         
         ctx
@@ -375,6 +414,7 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 Type::Float => "Float",
                 Type::Bool => "Bool",
                 Type::Struct(name) => name.as_str(),
+                Type::Channel(_) => "Channel",
                 _ => return Err(TypeError {
                     message: format!("Методы не поддерживаются для типа {:?}", obj_type),
                     span: span.clone(),
@@ -419,6 +459,24 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                                 "first" | "last" => return Ok(Type::Unknown), // Option[T]
                                 "sort" | "reverse" => return Ok(obj_type.clone()),
                                 _ => {}
+                            }
+                        }
+                        
+                        // Для Channel[T] метод receive возвращает T
+                        if type_name == "Channel" {
+                            if method == "receive" {
+                                if let Type::Channel(inner) = &obj_type {
+                                    return Ok(*inner.clone());
+                                }
+                            }
+                            if method == "try_receive" {
+                                // TODO: вернуть Maybe[T] когда будет реализовано
+                                if let Type::Channel(inner) = &obj_type {
+                                    return Ok(*inner.clone());
+                                }
+                            }
+                            if method == "send" {
+                                return Ok(Type::None);
                             }
                         }
                         

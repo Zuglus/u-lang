@@ -18,10 +18,12 @@ fn infer_type_from_expr(expr: &Expr, ctx: &Ctx) -> String {
         }
         Expr::FunctionCall { name, .. } => {
             // Try to infer from function name
-            if name == "channel_new" {
-                "Channel".to_string()
-            } else {
-                String::new()
+            match name.as_str() {
+                "channel_new" => "IntChannel".to_string(),
+                "channel_new_string" => "StringChannel".to_string(),
+                "channel_new_float" => "FloatChannel".to_string(),
+                "channel_new_bool" => "BoolChannel".to_string(),
+                _ => String::new(),
             }
         }
         _ => String::new(),
@@ -281,6 +283,18 @@ fn map_type(t: &str) -> String {
         return format!("{}<{}>", mapped_base, mapped_inner);
     }
     
+    // Handle Channel[T] syntax
+    if t.starts_with("Channel[") && t.ends_with(']') {
+        let inner = &t[8..t.len()-1]; // Extract T from Channel[T]
+        return match inner {
+            "Int" => "u_runtime::async_int_channel::AsyncIntChan".to_string(),
+            "String" => "u_runtime::async_string_channel::AsyncStringChan".to_string(),
+            "Float" => "u_runtime::async_float_channel::AsyncFloatChan".to_string(),
+            "Bool" => "u_runtime::async_bool_channel::AsyncBoolChan".to_string(),
+            _ => "u_runtime::async_int_channel::AsyncIntChan".to_string(), // Default
+        };
+    }
+    
     // Simple types
     match t {
         "Int" => "i64".to_string(),
@@ -288,6 +302,10 @@ fn map_type(t: &str) -> String {
         "String" => "String".to_string(),
         "Bool" => "bool".to_string(),
         "Channel" => "u_runtime::async_int_channel::AsyncIntChan".to_string(),
+        "IntChannel" => "u_runtime::async_int_channel::AsyncIntChan".to_string(),
+        "StringChannel" => "u_runtime::async_string_channel::AsyncStringChan".to_string(),
+        "FloatChannel" => "u_runtime::async_float_channel::AsyncFloatChan".to_string(),
+        "BoolChannel" => "u_runtime::async_bool_channel::AsyncBoolChan".to_string(),
         "Response" => "HttpResponse".to_string(),
         o => o.to_string(),
     }
@@ -298,6 +316,10 @@ fn map_param_type(t: &str, structs: &HashSet<String>, is_mut: bool) -> String {
         "Int" => "i64".into(), "Float" => "f64".into(), "Bool" => "bool".into(),
         "String" => "&str".into(), "Db" => "&Db".into(),
         "Channel" => "u_runtime::async_int_channel::AsyncIntChan".into(),
+        "IntChannel" => "u_runtime::async_int_channel::AsyncIntChan".into(),
+        "StringChannel" => "u_runtime::async_string_channel::AsyncStringChan".into(),
+        "FloatChannel" => "u_runtime::async_float_channel::AsyncFloatChan".into(),
+        "BoolChannel" => "u_runtime::async_bool_channel::AsyncBoolChan".into(),
         other => {
             if structs.contains(other) {
                 if is_mut { format!("&mut {}", other) } else { format!("&{}", other) }
@@ -309,7 +331,7 @@ fn map_param_type(t: &str, structs: &HashSet<String>, is_mut: bool) -> String {
 }
 
 fn is_ref_type(t: &str) -> bool {
-    !matches!(t, "Int" | "Float" | "Bool" | "Channel")
+    !matches!(t, "Int" | "Float" | "Bool" | "Channel" | "IntChannel" | "StringChannel" | "FloatChannel" | "BoolChannel")
 }
 
 fn map_return_type(t: &str, _structs: &HashSet<String>) -> String {
@@ -933,6 +955,9 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                 if is_copy_type(&var_type) {
                     // Copy types: clone
                     out.push_str(v); out.push_str(".clone();\n");
+                } else if var_type.ends_with("Channel") {
+                    // Channel types: clone (both Sender and Receiver needed)
+                    out.push_str(v); out.push_str(".clone();\n");
                 } else {
                     // Move types: just move (Rust does this automatically)
                     out.push_str(v); out.push_str(";\n");
@@ -1041,9 +1066,24 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
-                        // channel_new() -> u_runtime::async_int_channel::AsyncIntChannel.new()
+            // channel_new() -> AsyncIntChannel
             if name == "channel_new" {
                 out.push_str("u_runtime::async_int_channel::AsyncIntChannel.new()");
+                return;
+            }
+            // channel_new_string() -> AsyncStringChannel
+            if name == "channel_new_string" {
+                out.push_str("u_runtime::async_string_channel::AsyncStringChannel.new()");
+                return;
+            }
+            // channel_new_float() -> AsyncFloatChannel
+            if name == "channel_new_float" {
+                out.push_str("u_runtime::async_float_channel::AsyncFloatChannel.new()");
+                return;
+            }
+            // channel_new_bool() -> AsyncBoolChannel
+            if name == "channel_new_bool" {
+                out.push_str("u_runtime::async_bool_channel::AsyncBoolChannel.new()");
                 return;
             }
             // range(start, end) → range2(start, end)

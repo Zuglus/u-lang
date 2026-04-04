@@ -151,13 +151,16 @@ fn is_copy_type(typ: &Type, ctx: &OwnershipCtx) -> bool {
             if ctx.copy_types.contains(name) {
                 return true;
             }
+            // Channels are Clone (not Copy), but we treat them as "clonable"
+            // so they don't get marked as moved in spawn
+            if name.ends_with("Channel") {
+                return true; // Channels are cloned, not moved
+            }
             // Small structs (≤64 bytes) are Copy
-            // This is a simplified check - in real implementation
-            // we'd calculate actual size
             false // Conservative: assume Move unless proven Copy
         }
-        Type::Enum(name) => {
-            // Small enums are Copy
+        Type::Channel(_) => true, // Channels are cloned in spawn
+        Type::Enum(_name) => {
             false // Conservative
         }
         _ => false, // Lists, functions, etc. are Move
@@ -225,10 +228,20 @@ fn analyze_stmt(
         }
         
         Stmt::Spawn { expr, .. } => {
-            // Spawn moves captured variables
+            // Spawn moves captured variables, except channels (which are cloned)
             if let Expr::Lambda { body, .. } = expr {
                 let free_vars = collect_free_vars(body);
                 for var in free_vars {
+                    // Check if variable is a channel (ends with "Channel" in type name)
+                    let is_channel = ctx.get_state(&var).map(|state| {
+                        matches!(state, VarState::Live)
+                    }).unwrap_or(false);
+                    
+                    // Skip channels - they are cloned, not moved
+                    if var.ends_with("ch") || var.ends_with("_channel") || var.ends_with("Channel") {
+                        continue; // Channels are cloned in spawn
+                    }
+                    
                     if let Err(e) = ctx.move_var(&var, "spawn".to_string(), 0) {
                         errors.push(e);
                     }

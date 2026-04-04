@@ -72,6 +72,9 @@ pub fn calculate_type_size(typ: &Type, ctx: &TypeCtx) -> TypeSize {
         // Functions - pointer size
         Type::Function(_, _) => TypeSize::fixed(16), // fn ptr + environment
         
+        // Channel - contains Sender/Receiver (~24 bytes)
+        Type::Channel(_) => TypeSize::fixed(24),
+        
         // Unknown - assume dynamic
         Type::Unknown => TypeSize::dynamic(),
     }
