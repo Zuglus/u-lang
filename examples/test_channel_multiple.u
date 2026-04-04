@@ -1,0 +1,16 @@
+# Тест 3: Множественные отправки
+# Проверяет: несколько значений в одном канале
+
+ch = Channel.new()
+
+spawn(fn()
+    ch.send(1)
+    ch.send(2)
+    ch.send(3)
+end)
+
+a = ch.receive()
+b = ch.receive()
+c = ch.receive()
+print("Test 3 - Multiple sends: $a, $b, $c")
+# Ожидается: 1, 2, 3

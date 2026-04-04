@@ -1,0 +1,17 @@
+# Тест 4: Две горутины, один канал
+# Проверяет: конкурентная отправка из разных горутин
+
+ch = Channel.new()
+
+spawn(fn()
+    ch.send(100)
+end)
+
+spawn(fn()
+    ch.send(200)
+end)
+
+first = ch.receive()
+second = ch.receive()
+print("Test 4 - Two goroutines: $first, $second")
+# Ожидается: 100 и 200 (порядок может меняться)

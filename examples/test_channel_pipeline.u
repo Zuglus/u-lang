@@ -1,0 +1,23 @@
+# Тест 7: Pipeline (цепочка горутин)
+# Проверяет: передача данных через несколько стадий обработки
+
+ch1 = Channel.new()
+ch2 = Channel.new()
+ch3 = Channel.new()
+
+# Stage 1: +10
+spawn(fn()
+    val = ch1.receive()
+    ch2.send(val + 10)
+end)
+
+# Stage 2: *2
+spawn(fn()
+    val = ch2.receive()
+    ch3.send(val * 2)
+end)
+
+ch1.send(5)
+result = ch3.receive()
+print("Test 7 - Pipeline (5 + 10) * 2: $result")
+# Ожидается: 30

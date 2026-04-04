@@ -1,0 +1,20 @@
+# Тест 11: Fan-out (один отправитель, много получателей)
+# Проверяет: рассылка одного значения нескольким горутинам
+
+ch = Channel.new()
+
+# Получатель 1
+spawn(fn()
+    msg = ch.receive()
+    print("Receiver 1 got: $msg")
+end)
+
+# Получатель 2
+spawn(fn()
+    msg = ch.receive()
+    print("Receiver 2 got: $msg")
+end)
+
+# Один отправитель шлёт два сообщения
+ch.send("Hello")
+ch.send("World")
