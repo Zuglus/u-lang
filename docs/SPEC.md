@@ -186,6 +186,56 @@ print("Received: $result")  # Received: Hello from sender!
 
 ---
 
+## Select
+
+Множественный receive из нескольких каналов (как Go select).
+
+### Синтаксис
+
+```u
+select
+    case ch1.receive() => print("From ch1")
+    case ch2.receive() => print("From ch2")
+end
+```
+
+### Использование значения
+
+Значение доступно через `_val_` + имя канала:
+
+```u
+select
+    case ch1.receive() => print("Value: $_val_ch1")
+    case ch2.receive() => print("Value: $_val_ch2")
+end
+```
+
+### Пример
+
+```u
+ch1 = channel_new()
+ch2 = channel_new()
+
+fn worker(ch: IntChannel, val: Int)
+    ch.send(val)
+end
+
+spawn(fn() worker(ch1, 42))
+spawn(fn() worker(ch2, 100))
+
+select
+    case ch1.receive() => print("Got $_val_ch1 from ch1")
+    case ch2.receive() => print("Got $_val_ch2 from ch2")
+end
+```
+
+**Особенности:**
+- Блокируется до тех пор, пока один из каналов не будет готов
+- Если несколько каналов готовы — выбирается случайный (fair select от tokio)
+- Работает с `.receive()`, не с `.try_receive()`
+
+---
+
 ## Being/Nothing
 
 ### Определение
@@ -310,7 +360,7 @@ end
 - `try_receive() -> Maybe[T]`
 
 🚧 **В работе:**
-- select (множественный receive)
+- ✅ select (множественный receive)
 - Bounded channels с backpressure
 - Растущий стек (2 KB → 500 KB)
 
