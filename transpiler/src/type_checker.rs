@@ -717,6 +717,19 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
             Ok(())
         }
 
+        Stmt::Select { cases, .. } => {
+            // Type-check each case's channel expression (should be a receive operation)
+            for case in cases {
+                check_expr(&case.channel_expr, ctx)?;
+                ctx.enter_block();
+                for stmt in &case.body {
+                    check_stmt(stmt, ctx)?;
+                }
+                ctx.exit_block();
+            }
+            Ok(())
+        }
+
         Stmt::WhileLoop { condition, body, .. } => {
             let cond_type = check_expr(condition, ctx)?;
             if cond_type != Type::Bool {

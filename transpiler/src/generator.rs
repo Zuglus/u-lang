@@ -146,6 +146,7 @@ fn stmt_needs_async(s: &Stmt) -> bool {
         Stmt::ForLoop { iter, body, .. } => expr_needs_async(iter) || stmts_need_async(body),
         Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => stmts_need_async(body),
         Stmt::Match { expr, arms, .. } => expr_needs_async(expr) || arms.iter().any(|a| stmt_needs_async(&a.body)),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| stmts_need_async(&c.body)),
         _ => false,
     }
 }
@@ -173,6 +174,7 @@ fn stmt_calls_async(s: &Stmt, af: &HashSet<String>) -> bool {
         Stmt::ForLoop { iter, body, .. } => expr_calls_async(iter, af) || stmts_call_any_async(body, af),
         Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => stmts_call_any_async(body, af),
         Stmt::Match { expr, arms, .. } => expr_calls_async(expr, af) || arms.iter().any(|a| stmt_calls_async(&a.body, af)),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| stmts_call_any_async(&c.body, af)),
         _ => false,
     }
 }
@@ -380,6 +382,7 @@ fn stmt_has_qmark(s: &Stmt) -> bool {
         Stmt::WhileLoop { condition, body, .. } => expr_has_qmark(condition) || uses_qmark(body),
         Stmt::Loop { body, .. } => uses_qmark(body),
         Stmt::Match { expr, arms, .. } => expr_has_qmark(expr) || arms.iter().any(|a| stmt_has_qmark(&a.body)),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| uses_qmark(&c.body)),
         _ => false,
     }
 }
@@ -404,6 +407,7 @@ fn has_return_value(stmts: &[Stmt]) -> bool {
             || else_body.as_ref().map_or(false, |b| has_return_value(b)),
         Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => has_return_value(body),
         Stmt::Match { arms, .. } => arms.iter().any(|a| matches!(&a.body, Stmt::Return { value: Some(_), .. })),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| has_return_value(&c.body)),
         _ => false,
     })
 }
@@ -448,7 +452,7 @@ fn stmt_offset(stmt: &Stmt) -> usize {
         | Stmt::MemoryDecl { span, .. } | Stmt::UseDecl { span, .. }
         | Stmt::TraitDef { span, .. } | Stmt::ImplBlock { span, .. }
         | Stmt::WhileLoop { span, .. } | Stmt::Break { span, .. }
-        | Stmt::Continue { span, .. }
+        | Stmt::Continue { span, .. } | Stmt::Select { span, .. }
         => span.start,
     }
 }
@@ -935,6 +939,50 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         }
         Stmt::Continue { .. } => {
             out.push_str("continue;\n");
+        }
+        Stmt::Select { cases, .. } => {
+            // Generate tokio::select! macro
+            out.push_str("tokio::select! {\n");
+            for case in cases {
+                out.push_str(&pad); out.push_str("    ");
+                // Extract channel name and generate pattern
+                if let Expr::MethodCall { object, method, .. } = &case.channel_expr {
+                    if method == "receive" {
+                        // Get channel identifier
+                        if let Expr::Identifier { name, .. } = object.as_ref() {
+                            out.push_str("_val_"); out.push_str(name); out.push_str(" = ");
+                            gen_expr(object, out, ctx);
+                            out.push_str(".recv() => {\n");
+                            out.push_str(&pad); out.push_str("        let _val_"); out.push_str(name); out.push_str(" = _val_"); out.push_str(name); out.push_str(";\n");
+                            // No need for unwrap_or_default - recv() returns the value directly
+                            gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                            out.push_str(&pad); out.push_str("    },\n");
+                        } else {
+                            // Complex expression - use simplified form
+                            out.push_str("_val = ");
+                            gen_expr(&case.channel_expr, out, ctx);
+                            out.push_str(" => {\n");
+                            gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                            out.push_str(&pad); out.push_str("    },\n");
+                        }
+                    } else {
+                        // Non-receive method
+                        out.push_str("_val = ");
+                        gen_expr(&case.channel_expr, out, ctx);
+                        out.push_str(" => {\n");
+                        gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                        out.push_str(&pad); out.push_str("    },\n");
+                    }
+                } else {
+                    // Direct expression
+                    out.push_str("_val = ");
+                    gen_expr(&case.channel_expr, out, ctx);
+                    out.push_str(" => {\n");
+                    gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                    out.push_str(&pad); out.push_str("    },\n");
+                }
+            }
+            out.push_str(&pad); out.push_str("}\n");
         }
         Stmt::Spawn { expr, .. } => {
             // Unwrap lambda — spawn fn() expr is equivalent to spawn expr

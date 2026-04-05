@@ -3,7 +3,7 @@
 program = { SOI ~ NEWLINE* ~ (statement ~ (NEWLINE+ | &EOI))* ~ EOI }
 
 // Statements
-statement = { memory_stmt | use_stmt | pub_struct_def | struct_def | pub_type_def | type_def | trait_def | impl_block | test_fn_def | pub_fn_def | fn_def | for_loop | while_loop | loop_stmt | if_stmt | match_stmt
+statement = { memory_stmt | use_stmt | pub_struct_def | struct_def | pub_type_def | type_def | trait_def | impl_block | test_fn_def | pub_fn_def | fn_def | for_loop | while_loop | loop_stmt | if_stmt | match_stmt | select_stmt
             | spawn_stmt | return_stmt | break_stmt | continue_stmt | mutation_stmt | assignment | expr_stmt }
 
 test_fn_def    = { test_kw ~ fn_def }
@@ -27,6 +27,8 @@ for_loop    = { for_kw ~ for_pattern ~ in_kw ~ expression ~ NEWLINE+ ~ block ~ e
 loop_stmt   = { loop_kw ~ NEWLINE+ ~ block ~ end_kw }
 if_stmt     = { if_kw ~ expression ~ NEWLINE+ ~ block ~ elif_clause* ~ else_clause? ~ end_kw }
 match_stmt  = { match_kw ~ expression ~ NEWLINE+ ~ (match_arm ~ NEWLINE+)* ~ end_kw }
+select_stmt = { select_kw ~ NEWLINE+ ~ (select_case ~ NEWLINE+)* ~ end_kw }
+select_case = { case_kw ~ expression ~ "=>" ~ expr_stmt }
 spawn_stmt    = { spawn_kw ~ expression }
 return_stmt   = { return_kw ~ expression? }
 break_stmt    = { break_kw }
@@ -151,6 +153,7 @@ return_kw = @{ "return" ~ !(LETTER | ASCII_DIGIT | "_") }
 struct_kw = @{ "struct" ~ !(LETTER | ASCII_DIGIT | "_") }
 enum_kw   = @{ "enum" ~ !(LETTER | ASCII_DIGIT | "_") }
 match_kw  = @{ "match" ~ !(LETTER | ASCII_DIGIT | "_") }
+select_kw = @{ "select" ~ !(LETTER | ASCII_DIGIT | "_") }
 spawn_kw  = @{ "spawn" ~ !(LETTER | ASCII_DIGIT | "_") }
 loop_kw   = @{ "loop" ~ !(LETTER | ASCII_DIGIT | "_") }
 memory_kw = @{ "memory" ~ !(LETTER | ASCII_DIGIT | "_") }
@@ -161,6 +164,7 @@ test_kw     = @{ "test" ~ !(LETTER | ASCII_DIGIT | "_") }
 mut_kw      = @{ "mut" ~ !(LETTER | ASCII_DIGIT | "_") }
 break_kw    = @{ "break" ~ !(LETTER | ASCII_DIGIT | "_") }
 continue_kw = @{ "continue" ~ !(LETTER | ASCII_DIGIT | "_") }
+case_kw     = @{ "case" ~ !(LETTER | ASCII_DIGIT | "_") }
 while_kw    = @{ "while" ~ !(LETTER | ASCII_DIGIT | "_") }
 pub_kw      = @{ "pub" ~ !(LETTER | ASCII_DIGIT | "_") }
 

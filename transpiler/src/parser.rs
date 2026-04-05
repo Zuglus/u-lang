@@ -216,6 +216,21 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
             }
             Ok(Stmt::Match { expr, arms, span: s })
         }
+        Rule::select_stmt => {
+            let s = span(inner.as_span());
+            let mut cases = Vec::new();
+            for cp in meaningful(inner.into_inner()) {
+                if cp.as_rule() == Rule::select_case {
+                    let mut ci = meaningful(cp.into_inner());
+                    let _case_kw = ci.next().unwrap(); // Skip 'case' keyword
+                    let channel_expr = build_expression(ci.next().unwrap())?;
+                    let body_expr = build_expression(ci.next().unwrap().into_inner().next().unwrap())?;
+                    let body = vec![Stmt::ExprStmt { expr: body_expr, span: s.clone() }];
+                    cases.push(SelectCase { channel_expr, body });
+                }
+            }
+            Ok(Stmt::Select { cases, default: None, span: s })
+        }
         Rule::mutation_stmt => {
             let s = span(inner.as_span());
             let mut p = inner.into_inner();

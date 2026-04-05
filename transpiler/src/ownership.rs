@@ -238,7 +238,7 @@ fn analyze_stmt(
                     }).unwrap_or(false);
                     
                     // Skip channels - they are cloned, not moved
-                    if var.ends_with("ch") || var.ends_with("_channel") || var.ends_with("Channel") {
+                    if var.contains("ch") || var.contains("Channel") {
                         continue; // Channels are cloned in spawn
                     }
                     
@@ -246,6 +246,23 @@ fn analyze_stmt(
                         errors.push(e);
                     }
                 }
+            }
+            Ok(())
+        }
+        
+        Stmt::Select { cases, .. } => {
+            // Analyze each case's body
+            for case in cases {
+                ctx.enter_scope();
+                if let Err(e) = analyze_expr(&case.channel_expr, ctx, errors, 0) {
+                    errors.push(e);
+                }
+                for stmt in &case.body {
+                    if let Err(e) = analyze_stmt(stmt, ctx, errors) {
+                        errors.push(e);
+                    }
+                }
+                ctx.exit_scope();
             }
             Ok(())
         }

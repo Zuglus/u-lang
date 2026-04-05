@@ -85,6 +85,13 @@ pub enum Stmt {
     WhileLoop { condition: Expr, body: Vec<Stmt>, span: Span },
     Break { span: Span },
     Continue { span: Span },
+    Select { cases: Vec<SelectCase>, default: Option<Vec<Stmt>>, span: Span },
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectCase {
+    pub channel_expr: Expr,  // ch.receive() or similar
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone)]
