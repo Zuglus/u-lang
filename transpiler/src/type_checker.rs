@@ -24,9 +24,10 @@ pub struct TypeCtx {
     functions: HashMap<String, (Vec<Type>, Type)>,
     /// Структуры → поля
     structs: HashMap<String, HashMap<String, Type>>,
-    /// Enum → варианты
-    #[allow(dead_code)]
-    enums: HashMap<String, Vec<(String, Vec<Type>)>>,
+    /// Enum → (варианты, type_params)
+    enums: HashMap<String, (Vec<(String, Vec<Type>)>, Vec<String>)>,
+    /// Вариант → имя enum (для быстрого поиска)
+    variant_to_enum: HashMap<String, String>,
     /// Методы типов → (имя метода → (параметры, возврат))
     methods: HashMap<String, HashMap<String, (Vec<Type>, Type)>>,
 }
@@ -38,8 +39,10 @@ impl TypeCtx {
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
+            variant_to_enum: HashMap::new(),
             methods: HashMap::new(),
         };
+        
         // Встроенные функции
         ctx.functions.insert(
             "print".to_string(),
@@ -49,11 +52,11 @@ impl TypeCtx {
         // Встроенные методы List[T]
         let mut list_methods = HashMap::new();
         list_methods.insert("len".to_string(), (vec![], Type::Int));
-        list_methods.insert("first".to_string(), (vec![], Type::Unknown)); // Option[T]
-        list_methods.insert("last".to_string(), (vec![], Type::Unknown)); // Option[T]
+        list_methods.insert("first".to_string(), (vec![], Type::Unknown));
+        list_methods.insert("last".to_string(), (vec![], Type::Unknown));
         list_methods.insert("sum".to_string(), (vec![], Type::Int));
-        list_methods.insert("sort".to_string(), (vec![], Type::Unknown)); // List[T]
-        list_methods.insert("reverse".to_string(), (vec![], Type::Unknown)); // List[T]
+        list_methods.insert("sort".to_string(), (vec![], Type::Unknown));
+        list_methods.insert("reverse".to_string(), (vec![], Type::Unknown));
         list_methods.insert("join".to_string(), (vec![Type::String], Type::String));
         ctx.methods.insert("List".to_string(), list_methods);
         
@@ -61,15 +64,15 @@ impl TypeCtx {
         let mut string_methods = HashMap::new();
         string_methods.insert("len".to_string(), (vec![], Type::Int));
         string_methods.insert("trim".to_string(), (vec![], Type::String));
-        string_methods.insert("split".to_string(), (vec![Type::String], Type::Unknown)); // List[String]
+        string_methods.insert("split".to_string(), (vec![Type::String], Type::Unknown));
         string_methods.insert("contains".to_string(), (vec![Type::String], Type::Bool));
         string_methods.insert("starts_with".to_string(), (vec![Type::String], Type::Bool));
         string_methods.insert("ends_with".to_string(), (vec![Type::String], Type::Bool));
         string_methods.insert("replace".to_string(), (vec![Type::String, Type::String], Type::String));
         string_methods.insert("to_upper".to_string(), (vec![], Type::String));
         string_methods.insert("to_lower".to_string(), (vec![], Type::String));
-        string_methods.insert("to_int".to_string(), (vec![], Type::Unknown)); // Option[Int]
-        string_methods.insert("to_float".to_string(), (vec![], Type::Unknown)); // Option[Float]
+        string_methods.insert("to_int".to_string(), (vec![], Type::Unknown));
+        string_methods.insert("to_float".to_string(), (vec![], Type::Unknown));
         ctx.methods.insert("String".to_string(), string_methods);
         
         // Встроенные методы Int
@@ -401,10 +404,8 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
         
         Expr::StructInit { name, .. } => {
             // Проверить, является ли это enum вариантом
-            for (enum_name, variants) in &ctx.enums {
-                if variants.iter().any(|(v, _)| v == name) {
-                    return Ok(Type::Enum(enum_name.clone()));
-                }
+            if let Some(enum_name) = ctx.variant_to_enum.get(name) {
+                return Ok(Type::Enum(enum_name.clone()));
             }
             // Иначе это структура
             Ok(Type::Struct(name.clone()))
@@ -422,24 +423,30 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
         match stmt {
             Stmt::FnDef { name, params, return_type, .. } => {
                 let param_types: Vec<Type> = params.iter()
-                    .map(|p| p.type_ann.as_ref().map(|t| parse_type(t)).unwrap_or(Type::Unknown))
+                    .map(|p| p.type_ann.as_ref().map(|t| parse_type(t, None)).unwrap_or(Type::Unknown))
                     .collect();
                 let ret_type = return_type.as_ref()
-                    .map(|t| parse_type(t))
+                    .map(|t| parse_type(t, None))
                     .unwrap_or(Type::None);
                 ctx.functions.insert(name.clone(), (param_types, ret_type));
             }
             Stmt::StructDef { name, fields, .. } => {
                 let field_types: HashMap<String, Type> = fields.iter()
-                    .map(|f| (f.name.clone(), parse_type(&f.type_name)))
+                    .map(|f| (f.name.clone(), parse_type(&f.type_name, None)))
+                    .collect();
                     .collect();
                 ctx.structs.insert(name.clone(), field_types);
             }
-            Stmt::TypeDef { name, variants, .. } => {
+            Stmt::TypeDef { name, variants, type_params, .. } => {
                 let enum_variants: Vec<(String, Vec<Type>)> = variants.iter()
-                    .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name)).collect()))
+                    .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name, type_params.as_ref())).collect()))
                     .collect();
-                ctx.enums.insert(name.clone(), enum_variants);
+                // Заполняем variant_to_enum
+                for (vname, _) in &enum_variants {
+                    ctx.variant_to_enum.insert(vname.clone(), name.clone());
+                }
+                let tparams = type_params.clone().unwrap_or_default();
+                ctx.enums.insert(name.clone(), (enum_variants, tparams));
             }
             _ => {}
         }
@@ -563,7 +570,7 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                         eprintln!("DEBUG: expr_type={:?}, enum_name={:?}, enums={:?}", expr_type, enum_name, ctx.enums.keys().collect::<Vec<_>>());
                         
                         let binding_types: Vec<Type> = if let Some(name) = &enum_name {
-                            ctx.enums.get(name).and_then(|variants| {
+                            ctx.enums.get(name).and_then(|(variants, _)| {
                                 variants.iter().find(|(v, _)| v == variant_name).map(|(_, types)| types.clone())
                             }).unwrap_or_default()
                         } else {
@@ -654,16 +661,20 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
     }
 }
 
-fn parse_type(type_name: &str) -> Type {
+fn parse_type(type_name: &str, type_params: Option<&Vec<String>>) -> Type {
     match type_name {
         "Int" => Type::Int,
         "Float" => Type::Float,
         "String" => Type::String,
         "Bool" => Type::Bool,
         "none" => Type::None,
+        s if type_params.map_or(false, |tp| tp.contains(&s.to_string())) => {
+            // Type parameter like T in generic enum
+            Type::Unknown
+        }
         s if s.starts_with("List[") && s.ends_with("]") => {
             let inner = &s[5..s.len()-1];
-            Type::List(Box::new(parse_type(inner)))
+            Type::List(Box::new(parse_type(inner, type_params)))
         }
         s => Type::Struct(s.to_string()),
     }
