@@ -164,7 +164,6 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
         Expr::FloatLiteral { .. } => Ok(Type::Float),
         Expr::StringLiteral { .. } => Ok(Type::String),
         Expr::BoolLiteral { .. } => Ok(Type::Bool),
-        Expr::NoneLiteral { .. } => Ok(Type::None),
         
         Expr::Identifier { name, span } => {
             ctx.get_var(name)

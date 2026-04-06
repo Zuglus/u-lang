@@ -200,7 +200,7 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                     vi.filter(|f| f.as_rule() == Rule::typed_field).map(|tf| {
                         let mut fi = tf.into_inner();
                         TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
-                    }).collect())
+                    }).collect()
                 };
                 Variant { name: vname, fields }
             }).collect();
@@ -562,7 +562,7 @@ fn build_expression(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
             else { Ok(Expr::IntLiteral { value: t.parse()?, span: s }) }
         }
         Rule::bool_literal => Ok(Expr::BoolLiteral { value: pair.as_str() == "true", span: span(pair.as_span()) }),
-        Rule::none_literal => Ok(Expr::NoneLiteral { span: span(pair.as_span()) }),
+        Rule::none_literal => Ok(Expr::StructInit { name: "Nothing".to_string(), fields: vec![], span: span(pair.as_span()) }),
         Rule::identifier => Ok(Expr::Identifier { name: pair.as_str().into(), span: span(pair.as_span()) }),
         _ => unreachable!("unexpected: {:?}", pair.as_rule()),
     }
