@@ -2,6 +2,38 @@ use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
 use crate::ast::*;
 
+/// Check if a type is Copy (can be cloned instead of moved)
+/// Infer type from expression for Copy/Move decisions
+fn infer_type_from_expr(expr: &Expr, ctx: &Ctx) -> String {
+    match expr {
+        Expr::IntLiteral { .. } => "Int".to_string(),
+        Expr::FloatLiteral { .. } => "Float".to_string(),
+        Expr::BoolLiteral { .. } => "Bool".to_string(),
+        Expr::StringLiteral { .. } => "String".to_string(),
+        Expr::List { .. } => "List".to_string(),
+        Expr::StructInit { name, .. } => name.clone(),
+        Expr::Identifier { name, .. } => {
+            // Look up variable type from context
+            ctx.var_types.borrow().get(name).cloned().unwrap_or_default()
+        }
+        Expr::FunctionCall { name, .. } => {
+            // Try to infer from function name
+            match name.as_str() {
+                "channel_new" => "IntChannel".to_string(),
+                "channel_new_string" => "StringChannel".to_string(),
+                "channel_new_float" => "FloatChannel".to_string(),
+                "channel_new_bool" => "BoolChannel".to_string(),
+                _ => String::new(),
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn is_copy_type(type_name: &str) -> bool {
+    matches!(type_name, "Int" | "Float" | "Bool" | "i64" | "f64" | "bool")
+}
+
 struct Ctx {
     structs: HashSet<String>,
     struct_fields: HashMap<String, Vec<String>>,
@@ -11,6 +43,8 @@ struct Ctx {
     line_starts: Vec<usize>,
     filename: String,
     struct_vars: RefCell<HashSet<String>>,
+    /// Track variable types for Copy/Move decisions
+    var_types: RefCell<HashMap<String, String>>,
 }
 
 impl Ctx {
@@ -21,6 +55,7 @@ impl Ctx {
             fn_params: HashMap::new(), async_fns: HashSet::new(),
             line_starts: compute_line_starts(source), filename: filename.to_string(),
             struct_vars: RefCell::new(HashSet::new()),
+            var_types: RefCell::new(HashMap::new()),
         };
         for stmt in &program.statements {
             match stmt {
@@ -45,6 +80,9 @@ impl Ctx {
                     if is_struct_creating_expr(value, &ctx) {
                         ctx.struct_vars.borrow_mut().insert(name.clone());
                     }
+                    // Track type for Copy/Move decisions
+                    let type_name = infer_type_from_expr(value, &ctx);
+                    ctx.var_types.borrow_mut().insert(name.clone(), type_name);
                 }
                 _ => {}
             }
@@ -108,6 +146,7 @@ fn stmt_needs_async(s: &Stmt) -> bool {
         Stmt::ForLoop { iter, body, .. } => expr_needs_async(iter) || stmts_need_async(body),
         Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => stmts_need_async(body),
         Stmt::Match { expr, arms, .. } => expr_needs_async(expr) || arms.iter().any(|a| stmt_needs_async(&a.body)),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| stmts_need_async(&c.body)),
         _ => false,
     }
 }
@@ -135,6 +174,7 @@ fn stmt_calls_async(s: &Stmt, af: &HashSet<String>) -> bool {
         Stmt::ForLoop { iter, body, .. } => expr_calls_async(iter, af) || stmts_call_any_async(body, af),
         Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => stmts_call_any_async(body, af),
         Stmt::Match { expr, arms, .. } => expr_calls_async(expr, af) || arms.iter().any(|a| stmt_calls_async(&a.body, af)),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| stmts_call_any_async(&c.body, af)),
         _ => false,
     }
 }
@@ -227,15 +267,61 @@ fn stmts_access_field_on(param: &str, stmts: &[Stmt]) -> Option<String> {
     None
 }
 
-fn map_type(t: &str) -> &str {
-    match t { "Int" => "i64", "Float" => "f64", "String" => "String", "Bool" => "bool", "Channel" => "Chan", "Response" => "HttpResponse", o => o }
+fn map_type(t: &str) -> String {
+    // Handle generic types like Maybe[Int], List[String], Phantom[T]
+    if let Some(start) = t.find('[') {
+        let end = t.rfind(']').unwrap_or(t.len());
+        let base = &t[..start];
+        let inner = &t[start+1..end];
+        
+        let mapped_base = match base {
+            "Maybe" => "Maybe",
+            "List" => "Vec",
+            "Phantom" => "std::marker::PhantomData",
+            other => other,
+        };
+        
+        let mapped_inner = map_type(inner);
+        return format!("{}<{}>", mapped_base, mapped_inner);
+    }
+    
+    // Handle Channel[T] syntax
+    if t.starts_with("Channel[") && t.ends_with(']') {
+        let inner = &t[8..t.len()-1]; // Extract T from Channel[T]
+        return match inner {
+            "Int" => "u_runtime::async_int_channel::AsyncIntChan".to_string(),
+            "String" => "u_runtime::async_string_channel::AsyncStringChan".to_string(),
+            "Float" => "u_runtime::async_float_channel::AsyncFloatChan".to_string(),
+            "Bool" => "u_runtime::async_bool_channel::AsyncBoolChan".to_string(),
+            _ => "u_runtime::async_int_channel::AsyncIntChan".to_string(), // Default
+        };
+    }
+    
+    // Simple types
+    match t {
+        "Int" => "i64".to_string(),
+        "Float" => "f64".to_string(),
+        "String" => "String".to_string(),
+        "Bool" => "bool".to_string(),
+        "Channel" => "u_runtime::async_int_channel::AsyncIntChan".to_string(),
+        "IntChannel" => "u_runtime::async_int_channel::AsyncIntChan".to_string(),
+        "StringChannel" => "u_runtime::async_string_channel::AsyncStringChan".to_string(),
+        "FloatChannel" => "u_runtime::async_float_channel::AsyncFloatChan".to_string(),
+        "BoolChannel" => "u_runtime::async_bool_channel::AsyncBoolChan".to_string(),
+        "Response" => "HttpResponse".to_string(),
+        o => o.to_string(),
+    }
 }
 
 fn map_param_type(t: &str, structs: &HashSet<String>, is_mut: bool) -> String {
     match t {
         "Int" => "i64".into(), "Float" => "f64".into(), "Bool" => "bool".into(),
         "String" => "&str".into(), "Db" => "&Db".into(),
-        "Channel" => "Chan".into(),
+        "Channel" => "u_runtime::async_int_channel::AsyncIntChan".into(),
+        "IntChannel" => "u_runtime::async_int_channel::AsyncIntChan".into(),
+        "StringChannel" => "u_runtime::async_string_channel::AsyncStringChan".into(),
+        "FloatChannel" => "u_runtime::async_float_channel::AsyncFloatChan".into(),
+        "BoolChannel" => "u_runtime::async_bool_channel::AsyncBoolChan".into(),
         other => {
             if structs.contains(other) {
                 if is_mut { format!("&mut {}", other) } else { format!("&{}", other) }
@@ -247,11 +333,11 @@ fn map_param_type(t: &str, structs: &HashSet<String>, is_mut: bool) -> String {
 }
 
 fn is_ref_type(t: &str) -> bool {
-    !matches!(t, "Int" | "Float" | "Bool" | "Channel")
+    !matches!(t, "Int" | "Float" | "Bool" | "Channel" | "IntChannel" | "StringChannel" | "FloatChannel" | "BoolChannel")
 }
 
 fn map_return_type(t: &str, _structs: &HashSet<String>) -> String {
-    map_type(t).to_string()
+    map_type(t)
 }
 
 fn collect_free_vars(expr: &Expr) -> Vec<String> {
@@ -296,6 +382,7 @@ fn stmt_has_qmark(s: &Stmt) -> bool {
         Stmt::WhileLoop { condition, body, .. } => expr_has_qmark(condition) || uses_qmark(body),
         Stmt::Loop { body, .. } => uses_qmark(body),
         Stmt::Match { expr, arms, .. } => expr_has_qmark(expr) || arms.iter().any(|a| stmt_has_qmark(&a.body)),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| uses_qmark(&c.body)),
         _ => false,
     }
 }
@@ -320,6 +407,7 @@ fn has_return_value(stmts: &[Stmt]) -> bool {
             || else_body.as_ref().map_or(false, |b| has_return_value(b)),
         Stmt::ForLoop { body, .. } | Stmt::Loop { body, .. } | Stmt::WhileLoop { body, .. } => has_return_value(body),
         Stmt::Match { arms, .. } => arms.iter().any(|a| matches!(&a.body, Stmt::Return { value: Some(_), .. })),
+        Stmt::Select { cases, .. } => cases.iter().any(|c| has_return_value(&c.body)),
         _ => false,
     })
 }
@@ -364,7 +452,7 @@ fn stmt_offset(stmt: &Stmt) -> usize {
         | Stmt::MemoryDecl { span, .. } | Stmt::UseDecl { span, .. }
         | Stmt::TraitDef { span, .. } | Stmt::ImplBlock { span, .. }
         | Stmt::WhileLoop { span, .. } | Stmt::Break { span, .. }
-        | Stmt::Continue { span, .. }
+        | Stmt::Continue { span, .. } | Stmt::Select { span, .. }
         => span.start,
     }
 }
@@ -578,46 +666,61 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
     }
     out.push_str(&pad);
     match stmt {
-        Stmt::StructDef { name, fields, is_pub, .. } => {
+        Stmt::StructDef { name, type_params, fields, is_pub, .. } => {
+            // Skip Phantom - we use std::marker::PhantomData directly
+            if name == "Phantom" {
+                return;
+            }
             out.push_str("#[derive(Debug, Clone)]\n");
             if *is_pub { out.push_str(&pad); out.push_str("pub "); } else { out.push_str(&pad); }
             out.push_str("struct ");
             out.push_str(name);
+            if !type_params.is_empty() {
+                out.push('<');
+                for (i, tp) in type_params.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    out.push_str(tp);
+                }
+                out.push('>');
+            }
             out.push_str(" {\n");
             for f in fields {
                 out.push_str(&pad); out.push_str("    ");
                 if *is_pub { out.push_str("pub "); }
-                out.push_str(&f.name); out.push_str(": "); out.push_str(map_type(&f.type_name)); out.push_str(",\n");
+                out.push_str(&f.name); out.push_str(": "); out.push_str(&map_type(&f.type_name)); out.push_str(",\n");
             }
             out.push_str(&pad); out.push_str("}\n");
         }
-        Stmt::TypeDef { name, variants, type_params, is_pub, .. } => {
+        Stmt::TypeDef { name, type_params, variants, is_pub, .. } => {
             out.push_str("#[derive(Debug, Clone)]\n");
             if *is_pub { out.push_str(&pad); out.push_str("pub "); } else { out.push_str(&pad); }
             out.push_str("enum ");
             out.push_str(name);
-            // Add type parameters if present
-            if let Some(params) = type_params {
-                out.push_str("<");
-                for (i, p) in params.iter().enumerate() {
+            if !type_params.is_empty() {
+                out.push('<');
+                for (i, tp) in type_params.iter().enumerate() {
                     if i > 0 { out.push_str(", "); }
-                    out.push_str(p);
+                    out.push_str(tp);
                 }
-                out.push_str(">");
+                out.push('>');
             }
             out.push_str(" {\n");
             for v in variants {
-                out.push_str(&pad); out.push_str("    "); out.push_str(&v.name); out.push('(');
-                for (i, f) in v.fields.iter().enumerate() {
-                    if i > 0 { out.push_str(", "); }
-                    // Map type names, handling type parameters
-                    if type_params.as_ref().map_or(false, |tp| tp.contains(&f.type_name)) {
-                        out.push_str(&f.type_name); // Use T directly
-                    } else {
-                        out.push_str(map_type(&f.type_name));
+                out.push_str(&pad); out.push_str("    "); out.push_str(&v.name);
+                if !v.fields.is_empty() {
+                    out.push('(');
+                    for (i, f) in v.fields.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        // Map type names, handling type parameters
+                        if type_params.contains(&f.type_name) {
+                            out.push_str(&f.type_name); // Use T directly
+                        } else {
+                            out.push_str(map_type(&f.type_name));
+                        }
                     }
+                    out.push(')');
                 }
-                out.push_str("),\n");
+                out.push_str(",\n");
             }
             out.push_str(&pad); out.push_str("}\n");
         }
@@ -780,9 +883,15 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                                 out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
                             } else if let Some(en) = ctx.variant_to_enum.get(name) {
                                 out.push_str(en); out.push_str("::");
-                                out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                out.push_str(name);
+                                if !bindings.is_empty() {
+                                    out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                }
                             } else {
-                                out.push_str(name); out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                out.push_str(name);
+                                if !bindings.is_empty() {
+                                    out.push('('); out.push_str(&bindings.join(", ")); out.push(')');
+                                }
                             }
                         }
                         MatchPattern::StringLit(s) => { out.push('"'); out.push_str(s); out.push('"'); }
@@ -836,20 +945,76 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
         Stmt::Continue { .. } => {
             out.push_str("continue;\n");
         }
+        Stmt::Select { cases, .. } => {
+            // Generate tokio::select! macro
+            out.push_str("tokio::select! {\n");
+            for case in cases {
+                out.push_str(&pad); out.push_str("    ");
+                // Extract channel name and generate pattern
+                if let Expr::MethodCall { object, method, .. } = &case.channel_expr {
+                    if method == "receive" {
+                        // Get channel identifier
+                        if let Expr::Identifier { name, .. } = object.as_ref() {
+                            out.push_str("_val_"); out.push_str(name); out.push_str(" = ");
+                            gen_expr(object, out, ctx);
+                            out.push_str(".recv() => {\n");
+                            out.push_str(&pad); out.push_str("        let _val_"); out.push_str(name); out.push_str(" = _val_"); out.push_str(name); out.push_str(";\n");
+                            // No need for unwrap_or_default - recv() returns the value directly
+                            gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                            out.push_str(&pad); out.push_str("    },\n");
+                        } else {
+                            // Complex expression - use simplified form
+                            out.push_str("_val = ");
+                            gen_expr(&case.channel_expr, out, ctx);
+                            out.push_str(" => {\n");
+                            gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                            out.push_str(&pad); out.push_str("    },\n");
+                        }
+                    } else {
+                        // Non-receive method
+                        out.push_str("_val = ");
+                        gen_expr(&case.channel_expr, out, ctx);
+                        out.push_str(" => {\n");
+                        gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                        out.push_str(&pad); out.push_str("    },\n");
+                    }
+                } else {
+                    // Direct expression
+                    out.push_str("_val = ");
+                    gen_expr(&case.channel_expr, out, ctx);
+                    out.push_str(" => {\n");
+                    gen_stmts(&case.body, out, indent + 2, ctx, result_fn, declared);
+                    out.push_str(&pad); out.push_str("    },\n");
+                }
+            }
+            out.push_str(&pad); out.push_str("}\n");
+        }
         Stmt::Spawn { expr, .. } => {
             // Unwrap lambda — spawn fn() expr is equivalent to spawn expr
             let spawn_body = match expr {
                 Expr::Lambda { body, .. } => body.as_ref(),
                 _ => expr,
             };
-            // Clone captured variables so move closure works
+            // Clone or move captured variables
             let mut vars = collect_free_vars(spawn_body);
             vars.sort(); vars.dedup();
             vars.retain(|v| !ctx.fn_params.contains_key(v));
             out.push_str("{\n");
             for v in &vars {
                 out.push_str(&pad); out.push_str("    let ");
-                out.push_str(v); out.push_str(" = "); out.push_str(v); out.push_str(".clone();\n");
+                out.push_str(v); out.push_str(" = ");
+                // Check if variable is Copy or Move
+                let var_type = ctx.var_types.borrow().get(v).cloned().unwrap_or_default();
+                if is_copy_type(&var_type) {
+                    // Copy types: clone
+                    out.push_str(v); out.push_str(".clone();\n");
+                } else if var_type.ends_with("Channel") {
+                    // Channel types: clone (both Sender and Receiver needed)
+                    out.push_str(v); out.push_str(".clone();\n");
+                } else {
+                    // Move types: just move (Rust does this automatically)
+                    out.push_str(v); out.push_str(";\n");
+                }
             }
             out.push_str(&pad); out.push_str("    tokio::spawn(async move {\n");
             out.push_str(&pad); out.push_str("        ");
@@ -945,9 +1110,35 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
         }
         Expr::BoolLiteral { value, .. } => out.push_str(if *value { "true" } else { "false" }),
         Expr::NoneLiteral { .. } => out.push_str("None"),
-        Expr::Identifier { name, .. } => out.push_str(name),
+        Expr::Identifier { name, .. } => {
+            if let Some(en) = ctx.variant_to_enum.get(name) {
+                out.push_str(en); out.push_str("::"); out.push_str(name);
+            } else {
+                out.push_str(name);
+            }
+        }
         Expr::FunctionCall { name, args, .. } => {
             if name == "print" { gen_print(args, out, ctx); return; }
+            // channel_new() -> AsyncIntChannel
+            if name == "channel_new" {
+                out.push_str("u_runtime::async_int_channel::AsyncIntChannel.new()");
+                return;
+            }
+            // channel_new_string() -> AsyncStringChannel
+            if name == "channel_new_string" {
+                out.push_str("u_runtime::async_string_channel::AsyncStringChannel.new()");
+                return;
+            }
+            // channel_new_float() -> AsyncFloatChannel
+            if name == "channel_new_float" {
+                out.push_str("u_runtime::async_float_channel::AsyncFloatChannel.new()");
+                return;
+            }
+            // channel_new_bool() -> AsyncBoolChannel
+            if name == "channel_new_bool" {
+                out.push_str("u_runtime::async_bool_channel::AsyncBoolChannel.new()");
+                return;
+            }
             // range(start, end) → range2(start, end)
             let fn_name = if name == "range" && args.len() == 2 { "range2" } else { name.as_str() };
             out.push_str(fn_name); out.push('(');
@@ -1078,6 +1269,30 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             if method == "is_empty" && args.is_empty() {
                 gen_expr(object, out, ctx);
                 out.push_str(".is_empty()");
+                return;
+            }
+            // Channel methods: .send() and .receive() for u_runtime::Chan
+            // .send(data) -> ch.send(data)
+            if method == "send" && args.len() == 1 {
+                gen_expr(object, out, ctx);
+                out.push_str(".send(");
+                gen_expr(&args[0], out, ctx);
+                out.push_str(")");
+                return;
+            }
+            // .receive() -> ch.recv().await
+            if method == "receive" && args.is_empty() {
+                gen_expr(object, out, ctx);
+                out.push_str(".recv().await");
+                return;
+            }
+            // .try_receive() -> Maybe[T] (None if empty)
+            if method == "try_receive" && args.is_empty() {
+                // Generate: match ch.try_recv() { Some(v) => Being(value: v), None => Nothing(phantom: Phantom[T]) }
+                // For now, simplified - just return Being with the value or Nothing
+                // This is a placeholder - real implementation needs proper Maybe type
+                gen_expr(object, out, ctx);
+                out.push_str(".try_recv()");
                 return;
             }
             // .append(item) → .clone().push(item) (returns new vec)
@@ -1211,6 +1426,18 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             gen_expr(expr, out, ctx);
         }
         Expr::Index { object, index, .. } => {
+            // Handle Phantom[T] syntax
+            if let Expr::Identifier { name: obj_name, .. } = object.as_ref() {
+                if obj_name == "Phantom" {
+                    out.push_str("std::marker::PhantomData");
+                    if let Expr::Identifier { name: type_name, .. } = index.as_ref() {
+                        out.push_str("::<");
+                        out.push_str(&map_type(type_name));
+                        out.push_str(">");
+                    }
+                    return;
+                }
+            }
             gen_expr(object, out, ctx);
             out.push_str(".get(");
             gen_expr(index, out, ctx);
@@ -1220,6 +1447,11 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             out.push_str("vec!["); gen_args(elements, out, ctx); out.push(']');
         }
         Expr::StructInit { name, fields, .. } => {
+            // Handle Phantom[T] -> std::marker::PhantomData
+            if name == "Phantom" {
+                out.push_str("std::marker::PhantomData");
+                return;
+            }
             if ctx.structs.contains(name) {
                 out.push_str(name); out.push_str(" { ");
                 for (i, (fname, fval)) in fields.iter().enumerate() {
@@ -1229,12 +1461,15 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
                 }
                 out.push_str(" }");
             } else if let Some(en) = ctx.variant_to_enum.get(name) {
-                out.push_str(en); out.push_str("::"); out.push_str(name); out.push('(');
-                for (i, (_, fval)) in fields.iter().enumerate() {
-                    if i > 0 { out.push_str(", "); }
-                    gen_expr(fval, out, ctx);
+                out.push_str(en); out.push_str("::"); out.push_str(name);
+                if !fields.is_empty() {
+                    out.push('(');
+                    for (i, (_, fval)) in fields.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        gen_expr(fval, out, ctx);
+                    }
+                    out.push(')');
                 }
-                out.push(')');
             } else {
                 out.push_str(name); out.push('('); gen_args(&fields.iter().map(|(_, v)| v).cloned().collect::<Vec<_>>(), out, ctx); out.push(')');
             }

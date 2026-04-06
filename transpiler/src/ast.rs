@@ -72,8 +72,8 @@ pub enum Stmt {
         span: Span,
     },
     Return { value: Option<Expr>, span: Span },
-    StructDef { name: String, fields: Vec<TypedField>, is_pub: bool, span: Span },
-    TypeDef { name: String, variants: Vec<Variant>, type_params: Option<Vec<String>>, is_pub: bool, span: Span },
+    StructDef { name: String, type_params: Vec<String>, fields: Vec<TypedField>, is_pub: bool, span: Span },
+    TypeDef { name: String, type_params: Vec<String>, variants: Vec<Variant>, is_pub: bool, span: Span },
     Match { expr: Expr, arms: Vec<MatchArm>, span: Span },
     MutAssign { object: Expr, field: String, value: Expr, span: Span },
     Spawn { expr: Expr, span: Span },
@@ -85,6 +85,13 @@ pub enum Stmt {
     WhileLoop { condition: Expr, body: Vec<Stmt>, span: Span },
     Break { span: Span },
     Continue { span: Span },
+    Select { cases: Vec<SelectCase>, default: Option<Vec<Stmt>>, span: Span },
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectCase {
+    pub channel_expr: Expr,  // ch.receive() or similar
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone)]

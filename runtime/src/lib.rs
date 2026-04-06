@@ -807,3 +807,183 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+// Int Channel для U-lang
+pub mod int_channel {
+    use std::sync::mpsc::{channel, Sender, Receiver};
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    /// Unit struct — used as `IntChannel.new()` in U source
+    pub struct IntChannel;
+
+    impl IntChannel {
+        pub fn new(&self) -> IntChan {
+            let (tx, rx) = channel();
+            IntChan { sender: tx, receiver: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    /// The actual int channel value, cloneable across threads
+    #[derive(Clone)]
+    pub struct IntChan {
+        sender: Sender<i64>,
+        receiver: Arc<Mutex<Receiver<i64>>>,
+    }
+
+    impl IntChan {
+        pub fn send(&self, val: i64) {
+            let _ = self.sender.send(val);
+        }
+
+        pub fn recv(&self) -> i64 {
+            self.receiver.lock().unwrap().recv().unwrap_or(0)
+        }
+    }
+}
+
+// Async Int Channel для U-lang с tokio
+pub mod async_int_channel {
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    pub struct AsyncIntChannel;
+
+    impl AsyncIntChannel {
+        pub fn new(&self) -> AsyncIntChan {
+            let (tx, rx) = unbounded_channel::<i64>();
+            AsyncIntChan { sender: tx, receiver: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct AsyncIntChan {
+        sender: UnboundedSender<i64>,
+        receiver: Arc<Mutex<UnboundedReceiver<i64>>>,
+    }
+
+    impl AsyncIntChan {
+        pub fn send(&self, val: i64) {
+            let _ = self.sender.send(val);
+        }
+
+        pub async fn recv(&self) -> i64 {
+            self.receiver.lock().await.recv().await.unwrap_or(0)
+        }
+
+        pub fn try_recv(&self) -> Option<i64> {
+            // Non-blocking receive - would need a different approach for mpsc
+            // For now, return None (channel empty or closed)
+            None
+        }
+    }
+}
+
+// Async String Channel для U-lang с tokio
+pub mod async_string_channel {
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    pub struct AsyncStringChannel;
+
+    impl AsyncStringChannel {
+        pub fn new(&self) -> AsyncStringChan {
+            let (tx, rx) = unbounded_channel::<String>();
+            AsyncStringChan { sender: tx, receiver: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct AsyncStringChan {
+        sender: UnboundedSender<String>,
+        receiver: Arc<Mutex<UnboundedReceiver<String>>>,
+    }
+
+    impl AsyncStringChan {
+        pub fn send(&self, val: &str) {
+            let _ = self.sender.send(val.to_string());
+        }
+
+        pub async fn recv(&self) -> String {
+            self.receiver.lock().await.recv().await.unwrap_or_default()
+        }
+
+        pub fn try_recv(&self) -> Option<String> {
+            None
+        }
+    }
+}
+
+// Async Float Channel для U-lang с tokio
+pub mod async_float_channel {
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    pub struct AsyncFloatChannel;
+
+    impl AsyncFloatChannel {
+        pub fn new(&self) -> AsyncFloatChan {
+            let (tx, rx) = unbounded_channel::<f64>();
+            AsyncFloatChan { sender: tx, receiver: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct AsyncFloatChan {
+        sender: UnboundedSender<f64>,
+        receiver: Arc<Mutex<UnboundedReceiver<f64>>>,
+    }
+
+    impl AsyncFloatChan {
+        pub fn send(&self, val: f64) {
+            let _ = self.sender.send(val);
+        }
+
+        pub async fn recv(&self) -> f64 {
+            self.receiver.lock().await.recv().await.unwrap_or(0.0)
+        }
+
+        pub fn try_recv(&self) -> Option<f64> {
+            None
+        }
+    }
+}
+
+// Async Bool Channel для U-lang с tokio
+pub mod async_bool_channel {
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    pub struct AsyncBoolChannel;
+
+    impl AsyncBoolChannel {
+        pub fn new(&self) -> AsyncBoolChan {
+            let (tx, rx) = unbounded_channel::<bool>();
+            AsyncBoolChan { sender: tx, receiver: Arc::new(Mutex::new(rx)) }
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct AsyncBoolChan {
+        sender: UnboundedSender<bool>,
+        receiver: Arc<Mutex<UnboundedReceiver<bool>>>,
+    }
+
+    impl AsyncBoolChan {
+        pub fn send(&self, val: bool) {
+            let _ = self.sender.send(val);
+        }
+
+        pub async fn recv(&self) -> bool {
+            self.receiver.lock().await.recv().await.unwrap_or(false)
+        }
+
+        pub fn try_recv(&self) -> Option<bool> {
+            None
+        }
+    }
+}

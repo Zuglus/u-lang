@@ -1,0 +1,11 @@
+// Тест 1: Базовый send/receive
+// Проверяет: создание канала, отправку и получение одного значения
+
+ch = Channel.new()
+
+spawn(fn()
+    ch.send(42)
+end)
+
+result = ch.receive()
+print("Test 1 - Basic send/receive: $result")

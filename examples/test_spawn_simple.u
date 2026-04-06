@@ -1,0 +1,8 @@
+fn worker(id: Int)
+    print("Worker $id")
+end
+
+spawn(fn() worker(1))
+spawn(fn() worker(2))
+
+print("Main done")

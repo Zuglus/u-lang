@@ -13,6 +13,7 @@ pub enum Type {
     Struct(String),
     Enum(String),
     Function(Vec<Type>, Box<Type>), // параметры, возврат
+    Channel(Box<Type>),             // Channel[T] - канал с типом элемента
     Unknown,
 }
 
@@ -42,6 +43,16 @@ impl TypeCtx {
             variant_to_enum: HashMap::new(),
             methods: HashMap::new(),
         };
+        // Встроенная структура Phantom[T]
+        let phantom_fields = HashMap::new();
+        ctx.structs.insert("Phantom".to_string(), phantom_fields);
+        
+        // Встроенные структуры каналов (без полей, только для типизации)
+        ctx.structs.insert("IntChannel".to_string(), HashMap::new());
+        ctx.structs.insert("StringChannel".to_string(), HashMap::new());
+        ctx.structs.insert("FloatChannel".to_string(), HashMap::new());
+        ctx.structs.insert("BoolChannel".to_string(), HashMap::new());
+        ctx.structs.insert("Channel".to_string(), HashMap::new());
         
         // Встроенные функции
         ctx.functions.insert(
@@ -87,6 +98,58 @@ impl TypeCtx {
         float_methods.insert("abs".to_string(), (vec![], Type::Float));
         ctx.methods.insert("Float".to_string(), float_methods);
         
+        // Встроенные типы каналов для разных типов данных
+        let mut int_channel_methods = HashMap::new();
+        int_channel_methods.insert("send".to_string(), (vec![Type::Int], Type::None));
+        int_channel_methods.insert("receive".to_string(), (vec![], Type::Int));
+        int_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
+        ctx.methods.insert("IntChannel".to_string(), int_channel_methods);
+        
+        let mut string_channel_methods = HashMap::new();
+        string_channel_methods.insert("send".to_string(), (vec![Type::String], Type::None));
+        string_channel_methods.insert("receive".to_string(), (vec![], Type::String));
+        string_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
+        ctx.methods.insert("StringChannel".to_string(), string_channel_methods);
+        
+        let mut float_channel_methods = HashMap::new();
+        float_channel_methods.insert("send".to_string(), (vec![Type::Float], Type::None));
+        float_channel_methods.insert("receive".to_string(), (vec![], Type::Float));
+        float_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
+        ctx.methods.insert("FloatChannel".to_string(), float_channel_methods);
+        
+        let mut bool_channel_methods = HashMap::new();
+        bool_channel_methods.insert("send".to_string(), (vec![Type::Bool], Type::None));
+        bool_channel_methods.insert("receive".to_string(), (vec![], Type::Bool));
+        bool_channel_methods.insert("try_receive".to_string(), (vec![], Type::Enum("Maybe".to_string())));
+        ctx.methods.insert("BoolChannel".to_string(), bool_channel_methods);
+        
+        // Legacy Channel methods (default to Int)
+        let mut channel_methods = HashMap::new();
+        channel_methods.insert("send".to_string(), (vec![Type::Int], Type::None));
+        channel_methods.insert("receive".to_string(), (vec![], Type::Int));
+        channel_methods.insert("try_receive".to_string(), (vec![], Type::Int));
+        ctx.methods.insert("Channel".to_string(), channel_methods);
+        
+        // Встроенная функция channel_new() -> IntChannel
+        ctx.functions.insert(
+            "channel_new".to_string(),
+            (vec![], Type::Struct("IntChannel".to_string())),
+        );
+        
+        // Дополнительные функции для других типов каналов
+        ctx.functions.insert(
+            "channel_new_string".to_string(),
+            (vec![], Type::Struct("StringChannel".to_string())),
+        );
+        ctx.functions.insert(
+            "channel_new_float".to_string(),
+            (vec![], Type::Struct("FloatChannel".to_string())),
+        );
+        ctx.functions.insert(
+            "channel_new_bool".to_string(),
+            (vec![], Type::Struct("BoolChannel".to_string())),
+        );
+        
         ctx
     }
 
@@ -115,6 +178,16 @@ impl TypeCtx {
     /// Выйти из блока
     pub fn exit_block(&mut self) {
         self.vars.pop();
+    }
+
+    /// Получить поля структуры
+    pub fn get_struct(&self, name: &str) -> Option<&HashMap<String, Type>> {
+        self.structs.get(name)
+    }
+
+    /// Получить варианты enum
+    pub fn get_enum(&self, name: &str) -> Option<&Vec<(String, Vec<Type>)>> {
+        self.enums.get(name)
     }
 }
 
@@ -166,13 +239,20 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
         Expr::BoolLiteral { .. } => Ok(Type::Bool),
         
         Expr::Identifier { name, span } => {
-            ctx.get_var(name)
-                .ok_or_else(|| TypeError {
-                    message: format!("Неизвестная переменная: {}", name),
-                    span: span.clone(),
-                    context: None,
-                    help: None,
-                })
+            // Сначала проверяем переменные
+            if let Some(ty) = ctx.get_var(name) {
+                return Ok(ty.clone());
+            }
+            // Проверяем unit-варианты enum
+            if let Some(enum_name) = ctx.variant_to_enum.get(name) {
+                return Ok(Type::Enum(enum_name.clone()));
+            }
+            Err(TypeError {
+                message: format!("Неизвестная переменная: {}", name),
+                span: span.clone(),
+                context: None,
+                help: None,
+            })
         }
         
         Expr::BinaryOp { left, op, right, span } => {
@@ -336,6 +416,7 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 Type::Float => "Float",
                 Type::Bool => "Bool",
                 Type::Struct(name) => name.as_str(),
+                Type::Channel(_) => "Channel",
                 _ => return Err(TypeError {
                     message: format!("Методы не поддерживаются для типа {:?}", obj_type),
                     span: span.clone(),
@@ -383,6 +464,24 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                             }
                         }
                         
+                        // Для Channel[T] метод receive возвращает T
+                        if type_name == "Channel" {
+                            if method == "receive" {
+                                if let Type::Channel(inner) = &obj_type {
+                                    return Ok(*inner.clone());
+                                }
+                            }
+                            if method == "try_receive" {
+                                // TODO: вернуть Maybe[T] когда будет реализовано
+                                if let Type::Channel(inner) = &obj_type {
+                                    return Ok(*inner.clone());
+                                }
+                            }
+                            if method == "send" {
+                                return Ok(Type::None);
+                            }
+                        }
+                        
                         Ok(return_type.clone())
                     }
                     None => Err(TypeError {
@@ -402,12 +501,26 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
         }
         
         Expr::StructInit { name, .. } => {
+            // Специальная обработка для Phantom[T]
+            if name == "Phantom" {
+                return Ok(Type::Struct("Phantom".to_string()));
+            }
             // Проверить, является ли это enum вариантом
             if let Some(enum_name) = ctx.variant_to_enum.get(name) {
                 return Ok(Type::Enum(enum_name.clone()));
             }
             // Иначе это структура
             Ok(Type::Struct(name.clone()))
+        }
+        
+        Expr::Index { object, .. } => {
+            // Handle Phantom[T] -> Phantom type
+            if let Expr::Identifier { name: obj_name, .. } = object.as_ref() {
+                if obj_name == "Phantom" {
+                    return Ok(Type::Struct("Phantom".to_string()));
+                }
+            }
+            Ok(Type::Unknown)
         }
         
         _ => Ok(Type::Unknown), // Пока не реализовано
@@ -440,12 +553,11 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
                 let enum_variants: Vec<(String, Vec<Type>)> = variants.iter()
                     .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name, type_params.as_ref())).collect()))
                     .collect();
-                // Заполняем variant_to_enum
+                // Заполняем variant_to_enum для всех вариантов
                 for (vname, _) in &enum_variants {
                     ctx.variant_to_enum.insert(vname.clone(), name.clone());
                 }
-                let tparams = type_params.clone().unwrap_or_default();
-                ctx.enums.insert(name.clone(), (enum_variants, tparams));
+                ctx.enums.insert(name.clone(), (enum_variants, type_params.clone()));
             }
             _ => {}
         }
@@ -597,6 +709,19 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                 ctx.exit_block();
             }
             
+            Ok(())
+        }
+
+        Stmt::Select { cases, .. } => {
+            // Type-check each case's channel expression (should be a receive operation)
+            for case in cases {
+                check_expr(&case.channel_expr, ctx)?;
+                ctx.enter_block();
+                for stmt in &case.body {
+                    check_stmt(stmt, ctx)?;
+                }
+                ctx.exit_block();
+            }
             Ok(())
         }
 

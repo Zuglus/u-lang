@@ -1,0 +1,13 @@
+# Тест 8: Captured variables
+# Проверяет: захват переменных из внешнего scope в spawn
+
+ch = Channel.new()
+multiplier = 3
+
+spawn(fn()
+    ch.send(multiplier * 10)
+end)
+
+result = ch.receive()
+print("Test 8 - Captured variable: $result")
+# Ожидается: 30

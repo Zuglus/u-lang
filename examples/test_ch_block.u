@@ -1,0 +1,8 @@
+ch = channel_new()
+
+spawn(fn() {
+    ch.send(42)
+})
+
+result = ch.receive()
+print("Got: $result")

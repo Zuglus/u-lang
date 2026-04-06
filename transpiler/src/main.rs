@@ -378,6 +378,16 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
         return Err(anyhow!(output));
     }
     
+    // Size checking - enforce 500 KB stack limit
+    if let Err(e) = u::size_checker::check_program_sizes(&ast) {
+        return Err(anyhow!(e));
+    }
+    
+    // Ownership analysis - detect use-after-move
+    if let Err(e) = u::ownership::analyze_ownership(&ast) {
+        return Err(anyhow!("Ошибки владения:\n{}", e));
+    }
+    
     // Cycle detection - reject cyclic struct references
     if let Err(e) = u::cycle_detector::detect_cycles(&ast) {
         let line = source[..e.span.start].lines().count();

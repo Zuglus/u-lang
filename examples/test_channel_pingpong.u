@@ -1,0 +1,15 @@
+# Тест 6: Ping-pong между горутинами
+# Проверяет: двунаправленное взаимодействие через два канала
+
+ch1 = Channel.new()
+ch2 = Channel.new()
+
+spawn(fn()
+    msg = ch1.receive()
+    ch2.send(msg * 2)
+end)
+
+ch1.send(21)
+result = ch2.receive()
+print("Test 6 - Ping-pong: $result")
+# Ожидается: 42
