@@ -1,0 +1,35 @@
+struct User
+    name: String
+    age: Int
+end
+
+enum Maybe[T]
+    Being(value: T)
+    Nothing(phantom: Phantom[T])
+end
+
+fn find_user(id: Int) -> Maybe[User]
+    if id == 0
+        return Nothing(phantom: Phantom[User])
+    end
+    return Being(value: User(name: "Test", age: 25))
+end
+
+fn parse_number(s: String) -> Maybe[Float]
+    if s == ""
+        return Nothing(phantom: Phantom[Float])
+    end
+    return Being(value: 3.14)
+end
+
+user = find_user(0)
+match user
+    Being(u) => print("User: OK")
+    Nothing(p) => print("Ничто от User")
+end
+
+num = parse_number("")
+match num
+    Being(n) => print("Number: OK")
+    Nothing(p) => print("Ничто от Float")
+end

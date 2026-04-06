@@ -217,6 +217,8 @@ struct TypeContext
     structs: Map[String, StructDef]
     // Enum'ы
     enums: Map[String, EnumDef]
+    // Вариант enum → имя enum (для unit-вариантов: None, Nothing)
+    variant_to_enum: Map[String, String]
     // Родительский scope (для вложенности)
     parent: Option[TypeContext]
 end
@@ -384,15 +386,19 @@ u-lang/
 - [ ] Lexer struct с состоянием
 - [ ] Токенизация всех конструкций
 
-### Этап 3: Parser
-- [ ] AST enum/struct
-- [ ] Рекурсивный спуск
-- [ ] Обработка ошибок
+### Этап 3: Parser ✅ (Частично)
+- [x] AST enum/struct
+- [x] Рекурсивный спуск
+- [x] Обработка ошибок
+- [x] **Дженерики** — `enum Maybe[T]`
+- [x] **Unit-варианты** — `Nothing` без полей
 
-### Этап 4: Type Checker
-- [ ] Type enum
-- [ ] TypeContext
-- [ ] Проверка всех конструкций
+### Этап 4: Type Checker ✅ (Частично)
+- [x] Type enum
+- [x] TypeContext
+- [x] Проверка всех конструкций
+- [x] **Дженерики для enum** — `Maybe[T]`
+- [x] **Unit-варианты** — `None`, `Nothing` без полей
 
 ### Этап 5: Codegen
 - [ ] IR

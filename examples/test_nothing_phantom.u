@@ -1,0 +1,21 @@
+struct Phantom[T]
+end
+
+enum Maybe[T]
+    Being(value: T)
+    Nothing(phantom: Phantom[T])
+end
+
+fn divide(a: Int, b: Int) -> Maybe[Int]
+    if b == 0
+        return Nothing(phantom: Phantom[Int])
+    end
+    return Being(value: a / b)
+end
+
+result = divide(10, 0)
+
+match result
+    Being(v) => print("Being: $v")
+    Nothing(p) => print("Ничто от Int")
+end

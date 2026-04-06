@@ -17,7 +17,7 @@ use_path    = @{ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_" | ".")* }
 use_items   = { identifier ~ ("," ~ identifier)* }
 
 struct_def  = { struct_kw ~ identifier ~ NEWLINE+ ~ (typed_field ~ NEWLINE+)* ~ end_kw }
-type_def    = { enum_kw ~ identifier ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
+type_def    = { enum_kw ~ identifier ~ type_params? ~ NEWLINE+ ~ (type_variant ~ NEWLINE+)* ~ end_kw }
 trait_def        = { trait_kw ~ identifier ~ NEWLINE+ ~ (trait_method_sig ~ NEWLINE+)* ~ end_kw }
 trait_method_sig = { fn_kw ~ identifier ~ "(" ~ fn_params? ~ ")" ~ fn_ret? }
 impl_block       = { impl_kw ~ identifier ~ (for_kw ~ identifier)? ~ NEWLINE+ ~ (fn_def ~ NEWLINE+)* ~ end_kw }
@@ -43,7 +43,8 @@ fn_ret    = { "->" ~ identifier }
 
 // Struct / type fields
 typed_field  = { identifier ~ ":" ~ identifier }
-type_variant = { identifier ~ "(" ~ typed_field ~ ("," ~ typed_field)* ~ ")" }
+type_variant = { identifier ~ ("(" ~ typed_field ~ ("," ~ typed_field)* ~ ")")? }
+type_params  = { "[" ~ identifier ~ ("," ~ identifier)* ~ "]" }
 
 // Match — supports variant, string, list patterns, and wildcard
 match_arm       = { match_pattern ~ "=>" ~ match_arm_body }

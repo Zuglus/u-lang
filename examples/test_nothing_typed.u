@@ -1,0 +1,22 @@
+struct TypeInfo
+    name: String
+end
+
+enum Maybe[T]
+    Being(value: T)
+    Nothing(info: TypeInfo)
+end
+
+fn divide(a: Int, b: Int) -> Maybe[Int]
+    if b == 0
+        return Nothing(info: TypeInfo(name: "Int"))
+    end
+    return Being(value: a / b)
+end
+
+result = divide(10, 0)
+
+match result
+    Being(v) => print("Being: $v")
+    Nothing(info) => print("Ничто содержит тип")
+end

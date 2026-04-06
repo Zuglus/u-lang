@@ -1,0 +1,35 @@
+enum Maybe[T]
+    Being(value: T)
+    Nothing
+end
+
+fn divide(a: Int, b: Int) -> Maybe[Int]
+    if b == 0
+        return Nothing
+    end
+    return Being(value: a / b)
+end
+
+a = 100
+b = 5
+c = 0
+
+match divide(a, b)
+    Being(v) => print("$a/$b = $v")
+    Nothing => print("$a/$b: error")
+end
+
+match divide(a, c)
+    Being(v) => print("$a/$c = $v")
+    Nothing => print("$a/$c: division by zero")
+end
+
+match divide(42, 6)
+    Being(v) => print("42/6 = $v")
+    Nothing => print("42/6: error")
+end
+
+match divide(7, 0)
+    Being(v) => print("7/0 = $v")
+    Nothing => print("7/0: division by zero")
+end

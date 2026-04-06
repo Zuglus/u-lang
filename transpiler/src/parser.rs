@@ -176,23 +176,42 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
             let s = span(inner.as_span());
             let mut p = meaningful(inner.into_inner());
             let name = p.next().unwrap().as_str().to_string();
+            
+            // Parse optional type parameters [T] or [T, U]
+            let type_params = p.peek().filter(|x| x.as_rule() == Rule::type_params).map(|_| {
+                let tp = p.next().unwrap();
+                tp.into_inner()
+                    .filter(|x| x.as_rule() == Rule::identifier)
+                    .map(|id| id.as_str().to_string())
+                    .collect()
+            });
+            
             let variants = p.filter(|x| x.as_rule() == Rule::type_variant).map(|vp| {
                 let mut vi = vp.into_inner();
                 let vname = vi.next().unwrap().as_str().to_string();
-                let fields = vi.filter(|f| f.as_rule() == Rule::typed_field).map(|tf| {
-                    let mut fi = tf.into_inner();
-                    TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
-                }).collect();
+                // Handle unit variants (no fields) vs variants with fields
+                let fields = if let Some(fields_pair) = vi.filter(|x| x.as_rule() == Rule::typed_field).next() {
+                    let mut fi = fields_pair.into_inner();
+                    vec![TypedField { 
+                        name: fi.next().unwrap().as_str().to_string(), 
+                        type_name: fi.next().unwrap().as_str().to_string() 
+                    }]
+                } else {
+                    vi.filter(|f| f.as_rule() == Rule::typed_field).map(|tf| {
+                        let mut fi = tf.into_inner();
+                        TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
+                    }).collect())
+                };
                 Variant { name: vname, fields }
             }).collect();
-            Ok(Stmt::TypeDef { name, variants, is_pub: false, span: s })
+            Ok(Stmt::TypeDef { name, variants, type_params, is_pub: false, span: s })
         }
         Rule::pub_type_def => {
             let s = span(inner.as_span());
             let type_pair = inner.into_inner().find(|p| p.as_rule() == Rule::type_def).unwrap();
             match build_stmt_inner(type_pair)? {
-                Stmt::TypeDef { name, variants, .. } =>
-                    Ok(Stmt::TypeDef { name, variants, is_pub: true, span: s }),
+                Stmt::TypeDef { name, variants, type_params, .. } =>
+                    Ok(Stmt::TypeDef { name, variants, type_params, is_pub: true, span: s }),
                 _ => unreachable!(),
             }
         }

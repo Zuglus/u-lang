@@ -591,16 +591,31 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             }
             out.push_str(&pad); out.push_str("}\n");
         }
-        Stmt::TypeDef { name, variants, is_pub, .. } => {
+        Stmt::TypeDef { name, variants, type_params, is_pub, .. } => {
             out.push_str("#[derive(Debug, Clone)]\n");
             if *is_pub { out.push_str(&pad); out.push_str("pub "); } else { out.push_str(&pad); }
             out.push_str("enum ");
-            out.push_str(name); out.push_str(" {\n");
+            out.push_str(name);
+            // Add type parameters if present
+            if let Some(params) = type_params {
+                out.push_str("<");
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    out.push_str(p);
+                }
+                out.push_str(">");
+            }
+            out.push_str(" {\n");
             for v in variants {
                 out.push_str(&pad); out.push_str("    "); out.push_str(&v.name); out.push('(');
                 for (i, f) in v.fields.iter().enumerate() {
                     if i > 0 { out.push_str(", "); }
-                    out.push_str(map_type(&f.type_name));
+                    // Map type names, handling type parameters
+                    if type_params.as_ref().map_or(false, |tp| tp.contains(&f.type_name)) {
+                        out.push_str(&f.type_name); // Use T directly
+                    } else {
+                        out.push_str(map_type(&f.type_name));
+                    }
                 }
                 out.push_str("),\n");
             }
