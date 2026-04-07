@@ -189,19 +189,10 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
             let variants = p.filter(|x| x.as_rule() == Rule::type_variant).map(|vp| {
                 let mut vi = vp.into_inner();
                 let vname = vi.next().unwrap().as_str().to_string();
-                // Handle unit variants (no fields) vs variants with fields
-                let fields = if let Some(fields_pair) = vi.filter(|x| x.as_rule() == Rule::typed_field).next() {
-                    let mut fi = fields_pair.into_inner();
-                    vec![TypedField { 
-                        name: fi.next().unwrap().as_str().to_string(), 
-                        type_name: fi.next().unwrap().as_str().to_string() 
-                    }]
-                } else {
-                    vi.filter(|f| f.as_rule() == Rule::typed_field).map(|tf| {
-                        let mut fi = tf.into_inner();
-                        TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
-                    }).collect()
-                };
+                let fields: Vec<TypedField> = vi.filter(|f| f.as_rule() == Rule::typed_field).map(|tf| {
+                    let mut fi = tf.into_inner();
+                    TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
+                }).collect();
                 Variant { name: vname, fields }
             }).collect();
             Ok(Stmt::TypeDef { name, type_params, variants, is_pub: false, span: s })

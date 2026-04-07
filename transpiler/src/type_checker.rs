@@ -187,7 +187,7 @@ impl TypeCtx {
 
     /// Получить варианты enum
     pub fn get_enum(&self, name: &str) -> Option<&Vec<(String, Vec<Type>)>> {
-        self.enums.get(name)
+        self.enums.get(name).map(|(variants, _)| variants)
     }
 }
 
@@ -546,12 +546,11 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
                 let field_types: HashMap<String, Type> = fields.iter()
                     .map(|f| (f.name.clone(), parse_type(&f.type_name, None)))
                     .collect();
-                    .collect();
                 ctx.structs.insert(name.clone(), field_types);
             }
             Stmt::TypeDef { name, variants, type_params, .. } => {
                 let enum_variants: Vec<(String, Vec<Type>)> = variants.iter()
-                    .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name, type_params.as_ref())).collect()))
+                    .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name, Some(&type_params))).collect()))
                     .collect();
                 // Заполняем variant_to_enum для всех вариантов
                 for (vname, _) in &enum_variants {

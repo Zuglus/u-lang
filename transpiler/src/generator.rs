@@ -715,7 +715,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                         if type_params.contains(&f.type_name) {
                             out.push_str(&f.type_name); // Use T directly
                         } else {
-                            out.push_str(map_type(&f.type_name));
+                            out.push_str(&map_type(&f.type_name));
                         }
                     }
                     out.push(')');
