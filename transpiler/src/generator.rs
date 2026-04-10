@@ -501,6 +501,11 @@ pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[S
     let mut out = String::new();
     out.push_str("#![allow(unused_mut, unused_variables, dead_code, unused_imports)]\n");
     out.push_str("use u_runtime::*;\n");
+    // Встроенный enum Becoming — часть языка U.
+    // Гегелева триада: Being(value) / Nothing / (становление выражено самим типом).
+    out.push_str("#[derive(Debug, Clone, PartialEq)]\n");
+    out.push_str("pub enum Becoming<T> { Being(T), Nothing }\n");
+    out.push_str("use Becoming::*;\n");
 
     // Emit mod declarations for all modules (.rs and .u-transpiled)
     for m in rs_modules {
@@ -1201,7 +1206,6 @@ fn gen_expr(expr: &Expr, out: &mut String, ctx: &Ctx) {
             }
         }
         Expr::FunctionCall { name, args, .. } => {
-            if name == "print" { gen_print(args, out, ctx); return; }
             // channel_new() -> AsyncIntChannel
             if name == "channel_new" {
                 out.push_str("u_runtime::async_int_channel::AsyncIntChannel.new()");

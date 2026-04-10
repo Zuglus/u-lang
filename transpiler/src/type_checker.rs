@@ -23,6 +23,10 @@ pub struct TypeCtx {
     vars: Vec<HashMap<String, Type>>,
     /// Функции → сигнатуры
     functions: HashMap<String, (Vec<Type>, Type)>,
+    /// Внешние функции (импортированные через `use`).
+    /// Сигнатуры не известны — проверка аргументов пропускается,
+    /// rustc поймает несоответствие при компиляции сгенерированного Rust.
+    extern_fns: std::collections::HashSet<String>,
     /// Структуры → поля
     structs: HashMap<String, HashMap<String, Type>>,
     /// Enum → (варианты, type_params)
@@ -38,6 +42,7 @@ impl TypeCtx {
         let mut ctx = TypeCtx {
             vars: vec![HashMap::new()],
             functions: HashMap::new(),
+            extern_fns: std::collections::HashSet::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             variant_to_enum: HashMap::new(),
@@ -53,12 +58,6 @@ impl TypeCtx {
         ctx.structs.insert("FloatChannel".to_string(), HashMap::new());
         ctx.structs.insert("BoolChannel".to_string(), HashMap::new());
         ctx.structs.insert("Channel".to_string(), HashMap::new());
-        
-        // Встроенные функции
-        ctx.functions.insert(
-            "print".to_string(),
-            (vec![Type::String], Type::None),
-        );
         
         // Встроенные методы List[T]
         let mut list_methods = HashMap::new();
@@ -149,7 +148,28 @@ impl TypeCtx {
             "channel_new_bool".to_string(),
             (vec![], Type::Struct("BoolChannel".to_string())),
         );
-        
+
+        // Встроенная функция print — часть ядра языка
+        ctx.functions.insert(
+            "print".to_string(),
+            (vec![Type::String], Type::None),
+        );
+
+        // Becoming[T] — встроенный enum бытия/ничто.
+        // Варианты: Being(T) | Nothing. T пока представлен как Unknown.
+        ctx.enums.insert(
+            "Becoming".to_string(),
+            (
+                vec![
+                    ("Being".to_string(), vec![Type::Unknown]),
+                    ("Nothing".to_string(), vec![]),
+                ],
+                vec!["T".to_string()],
+            ),
+        );
+        ctx.variant_to_enum.insert("Being".to_string(), "Becoming".to_string());
+        ctx.variant_to_enum.insert("Nothing".to_string(), "Becoming".to_string());
+
         ctx
     }
 
@@ -359,7 +379,18 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 .map(|arg| check_expr(arg, ctx))
                 .collect();
             let arg_types = arg_types?;
-            
+
+            // Конструктор enum-варианта: Being(x), Ok(x), ...
+            if let Some(enum_name) = ctx.variant_to_enum.get(name) {
+                return Ok(Type::Enum(enum_name.clone()));
+            }
+
+            // Extern-функции из `use module: item` — сигнатура не известна,
+            // проверку типов делегируем rustc при компиляции сгенерированного Rust.
+            if ctx.extern_fns.contains(name) {
+                return Ok(Type::Unknown);
+            }
+
             match ctx.functions.get(name) {
                 Some((expected_params, return_type)) => {
                     if arg_types.len() != expected_params.len() {
@@ -573,6 +604,13 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
                 }
                 ctx.enums.insert(name.clone(), (enum_variants, type_params.clone()));
             }
+            Stmt::UseDecl { imports, .. } => {
+                // Импортированные имена становятся известными extern-функциями.
+                // Сигнатуры не проверяются здесь — rustc поймает несоответствие при компиляции.
+                for item in imports {
+                    ctx.extern_fns.insert(item.clone());
+                }
+            }
             _ => {}
         }
     }
@@ -678,8 +716,7 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
 
         Stmt::Match { expr, arms, span: _ } => {
             let expr_type = check_expr(expr, ctx)?;
-            eprintln!("DEBUG MATCH: expr_type={:?}, enums={:?}", expr_type, ctx.enums);
-            
+
             for arm in arms {
                 ctx.enter_block();
                 
@@ -692,8 +729,6 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                             _ => None,
                         };
                         
-                        eprintln!("DEBUG: expr_type={:?}, enum_name={:?}, enums={:?}", expr_type, enum_name, ctx.enums.keys().collect::<Vec<_>>());
-                        
                         let binding_types: Vec<Type> = if let Some(name) = &enum_name {
                             ctx.enums.get(name).and_then(|(variants, _)| {
                                 variants.iter().find(|(v, _)| v == variant_name).map(|(_, types)| types.clone())
@@ -701,8 +736,6 @@ fn check_stmt(stmt: &Stmt, ctx: &mut TypeCtx) -> Result<(), TypeError> {
                         } else {
                             Vec::new()
                         };
-                        
-                        eprintln!("DEBUG: variant_name={}, binding_types={:?}", variant_name, binding_types);
                         
                         for (i, binding) in bindings.iter().enumerate() {
                             let typ = binding_types.get(i).cloned().unwrap_or(Type::Unknown);
@@ -813,6 +846,10 @@ fn parse_type(type_name: &str, type_params: Option<&Vec<String>>) -> Type {
         s if s.starts_with("List[") && s.ends_with("]") => {
             let inner = &s[5..s.len()-1];
             Type::List(Box::new(parse_type(inner, type_params)))
+        }
+        s if s.starts_with("Becoming[") && s.ends_with("]") => {
+            // Тип параметра пока не сохраняем — enum по имени
+            Type::Enum("Becoming".to_string())
         }
         s => Type::Struct(s.to_string()),
     }

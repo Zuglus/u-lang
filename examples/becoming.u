@@ -1,0 +1,12 @@
+process divide(a: Int, b: Int) -> Becoming[Int]
+    if b == 0
+        return Nothing
+    end
+    return Being(a / b)
+end
+
+result = divide(10, 0)
+match result
+    Being(n) => print("got $n")
+    Nothing => print("division by zero")
+end

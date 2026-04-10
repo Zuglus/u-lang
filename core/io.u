@@ -1,8 +1,0 @@
-// Ядро: ввод-вывод
-// Обёртки над Rust для процессов, работающих с внешним нечто (stdout).
-
-use rust_io: println_raw
-
-process print(s: String) -> Nothing[String]
-    println_raw(s)
-end

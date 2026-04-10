@@ -4,6 +4,12 @@
 
 use std::error::Error;
 
+/// Печать строки в stdout — примитив ядра ввода-вывода.
+/// Это Rust-сторона процесса `print` из examples/print.u.
+pub fn println_raw(s: &str) {
+    println!("{}", s);
+}
+
 // Re-export everything at crate root for `use u_runtime::*;`
 #[cfg(feature = "sqlite")]
 pub use db::{Db, Row, Sqlite};
