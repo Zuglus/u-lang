@@ -16,3 +16,9 @@ Thumbs.db
 # Generated
 *.rs.bk
 todos.db
+
+# Sitegen outputs
+dist/
+dist-python/
+dist-rust/
+public/
