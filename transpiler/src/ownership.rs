@@ -280,6 +280,10 @@ fn analyze_expr(
 ) -> Result<(), String> {
     match expr {
         Expr::Identifier { name, .. } => {
+            // Type names (capitalized) are not variables — skip ownership check
+            if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                return Ok(());
+            }
             // Check if variable can be used
             if let Err(e) = ctx.check_use(name, line) {
                 errors.push(e);

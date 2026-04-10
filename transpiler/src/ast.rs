@@ -73,6 +73,15 @@ pub enum Stmt {
     },
     Return { value: Option<Expr>, span: Span },
     StructDef { name: String, type_params: Vec<String>, fields: Vec<TypedField>, is_pub: bool, span: Span },
+    LifecycleDef {
+        name: String,
+        born_field: TypedField,
+        born_setup: Vec<Stmt>,  // computed fields from born(param) body
+        lives_body: Vec<Stmt>,
+        dies_expr: Option<Box<Stmt>>,
+        is_pub: bool,
+        span: Span,
+    },
     TypeDef { name: String, type_params: Vec<String>, variants: Vec<Variant>, is_pub: bool, span: Span },
     Match { expr: Expr, arms: Vec<MatchArm>, span: Span },
     MutAssign { object: Expr, field: String, value: Expr, span: Span },

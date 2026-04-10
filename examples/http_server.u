@@ -1,0 +1,17 @@
+use tcp: bind, accept, tcp_write
+
+fn handle(conn)
+    return "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nHello from U"
+end
+
+struct Server
+    born(port: Int)
+        listener = bind(self.port)
+    lives
+        conn = accept(listener)
+        response = handle(conn)
+        tcp_write(conn, response)
+    dies: print("server stopped")
+end
+
+Server.new(8080).run()

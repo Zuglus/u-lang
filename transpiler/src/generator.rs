@@ -63,6 +63,10 @@ impl Ctx {
                     ctx.structs.insert(name.clone());
                     ctx.struct_fields.insert(name.clone(), fields.iter().map(|f| f.name.clone()).collect());
                 }
+                Stmt::LifecycleDef { name, born_field, .. } => {
+                    ctx.structs.insert(name.clone());
+                    ctx.struct_fields.insert(name.clone(), vec![born_field.name.clone()]);
+                }
                 Stmt::TypeDef { name, variants, .. } => {
                     for v in variants { ctx.variant_to_enum.insert(v.name.clone(), name.clone()); }
                 }
@@ -441,6 +445,21 @@ fn infer_param_type(param: &str, body: &[Stmt], ctx: &Ctx, return_type: Option<&
     "i64".to_string()
 }
 
+fn infer_return_type(body: &[Stmt]) -> &'static str {
+    for stmt in body {
+        if let Stmt::Return { value: Some(expr), .. } = stmt {
+            match expr {
+                Expr::StringLiteral { .. } => return "String",
+                Expr::FloatLiteral { .. } => return "f64",
+                Expr::BoolLiteral { .. } => return "bool",
+                Expr::IntLiteral { .. } => return "i64",
+                _ => {}
+            }
+        }
+    }
+    "i64"
+}
+
 fn stmt_offset(stmt: &Stmt) -> usize {
     match stmt {
         Stmt::Assignment { span, .. } | Stmt::ExprStmt { span, .. }
@@ -453,6 +472,7 @@ fn stmt_offset(stmt: &Stmt) -> usize {
         | Stmt::TraitDef { span, .. } | Stmt::ImplBlock { span, .. }
         | Stmt::WhileLoop { span, .. } | Stmt::Break { span, .. }
         | Stmt::Continue { span, .. } | Stmt::Select { span, .. }
+        | Stmt::LifecycleDef { span, .. }
         => span.start,
     }
 }
@@ -468,10 +488,13 @@ fn infer_method_ret(body: &[Stmt], target: &str, _structs: &HashSet<String>) -> 
     "i64".to_string()
 }
 
-pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[String], ext_fn_params: &HashMap<String, Vec<FnParam>>) -> Result<String, String> {
+pub fn generate(program: &Program, source: &str, filename: &str, rs_modules: &[String], ext_fn_params: &HashMap<String, Vec<FnParam>>, ext_async_fns: &[String]) -> Result<String, String> {
     let mut ctx = Ctx::new(program, source, filename);
     for (name, params) in ext_fn_params {
         ctx.fn_params.entry(name.clone()).or_insert_with(|| params.clone());
+    }
+    for name in ext_async_fns {
+        ctx.async_fns.insert(name.clone());
     }
     validate_spawn_safety(program, &ctx)?;
 
@@ -612,7 +635,7 @@ fn is_async_function(name: &str) -> bool {
 }
 
 fn is_async_method(method: &str) -> bool {
-    matches!(method, "recv" | "recv_timeout" | "accept" | "listen" | "respond" | "path")
+    matches!(method, "recv" | "recv_timeout" | "accept" | "listen" | "respond" | "path" | "run")
 }
 
 fn runtime_param_types(name: &str) -> Option<&'static [&'static str]> {
@@ -666,6 +689,66 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
     }
     out.push_str(&pad);
     match stmt {
+        Stmt::LifecycleDef { name, born_field, born_setup, lives_body, dies_expr, is_pub, .. } => {
+            // struct Name { field: Type }
+            out.push_str("#[derive(Debug)]\n");
+            out.push_str(&pad);
+            if *is_pub { out.push_str("pub "); }
+            out.push_str("struct ");
+            out.push_str(name);
+            out.push_str(" {\n");
+            out.push_str(&pad); out.push_str("    ");
+            out.push_str(&born_field.name);
+            out.push_str(": ");
+            out.push_str(&map_type(&born_field.type_name));
+            out.push_str(",\n");
+            out.push_str(&pad); out.push_str("}\n\n");
+
+            // impl Name
+            out.push_str("impl "); out.push_str(name); out.push_str(" {\n");
+
+            // fn new(field: Type) -> Self
+            out.push_str("    fn new(");
+            out.push_str(&born_field.name);
+            out.push_str(": ");
+            out.push_str(&map_type(&born_field.type_name));
+            out.push_str(") -> Self {\n");
+            out.push_str("        Self { ");
+            out.push_str(&born_field.name);
+            out.push_str(" }\n    }\n\n");
+
+            // async fn run(mut self) { born_setup; loop { lives_body } }
+            out.push_str("    async fn run(mut self) {\n");
+            // born_setup: computed fields run once before the loop
+            if !born_setup.is_empty() {
+                let mut setup_declared: HashSet<String> = HashSet::new();
+                for stmt in born_setup {
+                    let mut s = String::new();
+                    gen_stmt(stmt, &mut s, indent + 2, ctx, false, &mut setup_declared);
+                    out.push_str(&s);
+                }
+            }
+            out.push_str("        loop {\n");
+            let mut lives_declared: HashSet<String> = HashSet::new();
+            for stmt in lives_body {
+                let mut s = String::new();
+                gen_stmt(stmt, &mut s, indent + 3, ctx, false, &mut lives_declared);
+                out.push_str(&s);
+            }
+            out.push_str("        }\n    }\n}\n\n");
+
+            // impl Drop for Name
+            if let Some(dies) = dies_expr {
+                out.push_str("impl Drop for ");
+                out.push_str(name);
+                out.push_str(" {\n    fn drop(&mut self) {\n");
+                let mut ds = String::new();
+                let mut dies_declared: HashSet<String> = HashSet::new();
+                gen_stmt(dies, &mut ds, indent + 2, ctx, false, &mut dies_declared);
+                out.push_str(&ds);
+                out.push_str("    }\n}\n");
+            }
+        }
         Stmt::StructDef { name, type_params, fields, is_pub, .. } => {
             // Skip Phantom - we use std::marker::PhantomData directly
             if name == "Phantom" {
@@ -715,7 +798,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
                         if type_params.contains(&f.type_name) {
                             out.push_str(&f.type_name); // Use T directly
                         } else {
-                            out.push_str(map_type(&f.type_name));
+                            out.push_str(&map_type(&f.type_name));
                         }
                     }
                     out.push(')');
@@ -784,7 +867,7 @@ fn gen_stmt(stmt: &Stmt, out: &mut String, indent: usize, ctx: &Ctx, result_fn: 
             } else if has_ret {
                 let ret = return_type.as_deref()
                     .map(|t| map_return_type(t, &ctx.structs))
-                    .unwrap_or_else(|| "i64".to_string());
+                    .unwrap_or_else(|| infer_return_type(body).to_string());
                 out.push_str(" -> "); out.push_str(&ret);
             }
             out.push_str(" {\n");

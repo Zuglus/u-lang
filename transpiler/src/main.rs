@@ -414,7 +414,8 @@ fn compile(path: &PathBuf) -> anyhow::Result<PathBuf> {
     let mut ext_fn_params = HashMap::new();
     for m in &u_modules { ext_fn_params.extend(m.fn_params.clone()); }
 
-    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params)
+    let ext_async_fns = find_rs_async_fns(u_dir, &rs_modules);
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params, &ext_async_fns)
         .map_err(|e| anyhow!("{}", e))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let deps = analyze_deps(&ast);
@@ -446,7 +447,8 @@ fn compile_tests(path: &PathBuf, test_names: &[String]) -> anyhow::Result<PathBu
     let mut ext_fn_params = HashMap::new();
     for m in &u_modules { ext_fn_params.extend(m.fn_params.clone()); }
 
-    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params)
+    let ext_async_fns = find_rs_async_fns(u_dir, &rs_modules);
+    let rust_code = u::generator::generate(&ast, &source, u_filename, &all_module_names, &ext_fn_params, &ext_async_fns)
         .map_err(|e| anyhow!("{}", e))?;
 
     // Replace #[tokio::main] and everything after with test runner
@@ -522,6 +524,28 @@ fn find_rs_modules(dir: &Path) -> Vec<String> {
     }
     modules.sort();
     modules
+}
+
+/// Scan .rs module files for `pub async fn` declarations
+fn find_rs_async_fns(dir: &Path, modules: &[String]) -> Vec<String> {
+    let mut async_fns = Vec::new();
+    for m in modules {
+        let path = dir.join(format!("{}.rs", m));
+        if let Ok(src) = std::fs::read_to_string(&path) {
+            for line in src.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("pub async fn ") {
+                    if let Some(rest) = trimmed.strip_prefix("pub async fn ") {
+                        let name = rest.split('(').next().unwrap_or("").trim();
+                        if !name.is_empty() {
+                            async_fns.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    async_fns
 }
 
 /// Convert U's assert/assert_eq function calls to Rust macros

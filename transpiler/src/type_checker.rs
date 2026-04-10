@@ -186,7 +186,7 @@ impl TypeCtx {
     }
 
     /// Получить варианты enum
-    pub fn get_enum(&self, name: &str) -> Option<&Vec<(String, Vec<Type>)>> {
+    pub fn get_enum(&self, name: &str) -> Option<&(Vec<(String, Vec<Type>)>, Vec<String>)> {
         self.enums.get(name)
     }
 }
@@ -246,6 +246,10 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
             // Проверяем unit-варианты enum
             if let Some(enum_name) = ctx.variant_to_enum.get(name) {
                 return Ok(Type::Enum(enum_name.clone()));
+            }
+            // Тип (struct/lifecycle) используется как значение (для TypeName.new(...))
+            if ctx.structs.contains_key(name.as_str()) {
+                return Ok(Type::Struct(name.clone()));
             }
             Err(TypeError {
                 message: format!("Неизвестная переменная: {}", name),
@@ -425,6 +429,12 @@ pub fn check_expr(expr: &Expr, ctx: &TypeCtx) -> Result<Type, TypeError> {
                 }),
             };
             
+            // Lifecycle/struct: TypeName.new(...) → TypeName, instance.run() → ()
+            if let Type::Struct(sname) = &obj_type {
+                if method == "new" { return Ok(Type::Struct(sname.clone())); }
+                if method == "run" { return Ok(Type::Unknown); }
+            }
+
             match ctx.methods.get(type_name) {
                 Some(methods) => match methods.get(method) {
                     Some((expected_params, return_type)) => {
@@ -546,12 +556,16 @@ pub fn check_program(program: &Program) -> Result<(), Vec<TypeError>> {
                 let field_types: HashMap<String, Type> = fields.iter()
                     .map(|f| (f.name.clone(), parse_type(&f.type_name, None)))
                     .collect();
-                    .collect();
+                ctx.structs.insert(name.clone(), field_types);
+            }
+            Stmt::LifecycleDef { name, born_field, .. } => {
+                let mut field_types: HashMap<String, Type> = HashMap::new();
+                field_types.insert(born_field.name.clone(), parse_type(&born_field.type_name, None));
                 ctx.structs.insert(name.clone(), field_types);
             }
             Stmt::TypeDef { name, variants, type_params, .. } => {
                 let enum_variants: Vec<(String, Vec<Type>)> = variants.iter()
-                    .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name, type_params.as_ref())).collect()))
+                    .map(|v| (v.name.clone(), v.fields.iter().map(|f| parse_type(&f.type_name, Some(type_params))).collect()))
                     .collect();
                 // Заполняем variant_to_enum для всех вариантов
                 for (vname, _) in &enum_variants {

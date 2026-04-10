@@ -132,7 +132,7 @@ fn calculate_struct_size(name: &str, ctx: &TypeCtx) -> TypeSize {
 fn calculate_enum_size(name: &str, ctx: &TypeCtx) -> TypeSize {
     // Get enum variants
     let variants = match ctx.get_enum(name) {
-        Some(v) => v,
+        Some((v, _)) => v,
         None => return TypeSize::dynamic(),
     };
     

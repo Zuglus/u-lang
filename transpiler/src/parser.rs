@@ -153,6 +153,68 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
             let value = meaningful(inner.into_inner()).next().map(|e| build_expression(e)).transpose()?;
             Ok(Stmt::Return { value, span: s })
         }
+        Rule::lifecycle_def => {
+            let s = span(inner.as_span());
+            let mut p = meaningful(inner.into_inner());
+            let name = p.next().unwrap().as_str().to_string();
+            // born_clause → born_simple or born_with_body
+            let born_pair = p.next().unwrap(); // born_clause
+            let (born_field, born_setup) = {
+                let mut born_inner = meaningful(born_pair.into_inner());
+                let variant = born_inner.next().unwrap(); // born_simple or born_with_body
+                match variant.as_rule() {
+                    Rule::born_simple => {
+                        let tf = meaningful(variant.into_inner())
+                            .find(|x| x.as_rule() == Rule::typed_field).unwrap();
+                        let mut fi = tf.into_inner();
+                        let field = TypedField {
+                            name: fi.next().unwrap().as_str().to_string(),
+                            type_name: fi.next().unwrap().as_str().to_string(),
+                        };
+                        (field, vec![])
+                    }
+                    Rule::born_with_body => {
+                        let mut bi = meaningful(variant.into_inner());
+                        let tf = bi.find(|x| x.as_rule() == Rule::typed_field).unwrap();
+                        let mut fi = tf.into_inner();
+                        let field = TypedField {
+                            name: fi.next().unwrap().as_str().to_string(),
+                            type_name: fi.next().unwrap().as_str().to_string(),
+                        };
+                        let setup = if let Some(body_pair) = bi.find(|x| x.as_rule() == Rule::born_body) {
+                            build_block(body_pair)?
+                        } else { vec![] };
+                        (field, setup)
+                    }
+                    _ => unreachable!(),
+                }
+            };
+            // lives_clause → block
+            let lives_pair = p.next().unwrap(); // lives_clause
+            let lives_body = {
+                let block_pair = meaningful(lives_pair.into_inner())
+                    .find(|x| x.as_rule() == Rule::block).unwrap();
+                build_block(block_pair)?
+            };
+            // dies_clause (optional) → expr_stmt
+            let dies_expr = if let Some(dies_pair) = p.next() {
+                let expr_pair = meaningful(dies_pair.into_inner())
+                    .find(|x| x.as_rule() == Rule::expr_stmt).unwrap();
+                Some(Box::new(build_stmt_inner(expr_pair)?))
+            } else {
+                None
+            };
+            Ok(Stmt::LifecycleDef { name, born_field, born_setup, lives_body, dies_expr, is_pub: false, span: s })
+        }
+        Rule::pub_lifecycle_def => {
+            let s = span(inner.as_span());
+            let lc_pair = inner.into_inner().find(|p| p.as_rule() == Rule::lifecycle_def).unwrap();
+            match build_stmt_inner(lc_pair)? {
+                Stmt::LifecycleDef { name, born_field, born_setup, lives_body, dies_expr, .. } =>
+                    Ok(Stmt::LifecycleDef { name, born_field, born_setup, lives_body, dies_expr, is_pub: true, span: s }),
+                _ => unreachable!(),
+            }
+        }
         Rule::struct_def => {
             let s = span(inner.as_span());
             let mut p = meaningful(inner.into_inner()).peekable();
@@ -190,18 +252,13 @@ fn build_stmt_inner(inner: pest::iterators::Pair<Rule>) -> anyhow::Result<Stmt> 
                 let mut vi = vp.into_inner();
                 let vname = vi.next().unwrap().as_str().to_string();
                 // Handle unit variants (no fields) vs variants with fields
-                let fields = if let Some(fields_pair) = vi.filter(|x| x.as_rule() == Rule::typed_field).next() {
-                    let mut fi = fields_pair.into_inner();
-                    vec![TypedField { 
-                        name: fi.next().unwrap().as_str().to_string(), 
-                        type_name: fi.next().unwrap().as_str().to_string() 
-                    }]
-                } else {
-                    vi.filter(|f| f.as_rule() == Rule::typed_field).map(|tf| {
-                        let mut fi = tf.into_inner();
-                        TypedField { name: fi.next().unwrap().as_str().to_string(), type_name: fi.next().unwrap().as_str().to_string() }
-                    }).collect()
-                };
+                let fields: Vec<TypedField> = vi.filter(|x| x.as_rule() == Rule::typed_field).map(|tf| {
+                    let mut fi = tf.into_inner();
+                    TypedField {
+                        name: fi.next().unwrap().as_str().to_string(),
+                        type_name: fi.next().unwrap().as_str().to_string(),
+                    }
+                }).collect();
                 Variant { name: vname, fields }
             }).collect();
             Ok(Stmt::TypeDef { name, type_params, variants, is_pub: false, span: s })
