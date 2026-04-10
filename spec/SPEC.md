@@ -186,34 +186,36 @@ end
 struct Server
     born: port: Int
     lives
-        request = listen()
-        response = handle(request)
-        respond(response)
-    dies: close()
+        loop
+            conn = accept(port)
+            spawn handle(conn)
+        end
+    dies: close(port)
 end
 
 Server.new(8080).run()
 ```
 
-`born` — что нужно для создания. `lives` — что повторяется по кругу. `dies` — что при завершении.
+`born` — что нужно для создания. `lives` — что происходит пока существует. `dies` — что при завершении.
+
+`lives` не означает цикл. Цикл — явный `loop` или `for` внутри `lives`. Без цикла — `lives` выполняется один раз.
 
 Компилятор выводит из жизненного цикла:
 - `born` → struct + fn new
-- `lives` → async fn run с loop
+- `lives` → async fn run
 - `dies` → impl Drop
 
-Программист не пишет `struct`, `impl`, `fn new`, `fn run`, `loop`, `impl Drop` — компилятор выводит всё из born/lives/dies.
+Программист не пишет `struct`, `impl`, `fn new`, `fn run`, `impl Drop` — компилятор выводит всё из born/lives/dies.
 
-### Условие жизни выводится из born
+### Три уровня
 
-| born параметр | lives условие |
-|---------------|---------------|
-| `port: Int` | пока listener открыт |
-| `ch: Channel` | пока канал не закрыт |
-| `n: Int` (счётчик) | N итераций |
-| нет параметров | вечно |
+| Уровень | Синтаксис | Пример |
+|---------|-----------|--------|
+| Скрипт | плоский код | `data = read_file("x")` |
+| Одноразовая задача | `born/lives/dies` без цикла | отчёт, конвертация |
+| Долгоживущий процесс | `born/lives/dies` с явным `loop` | сервер, воркер |
 
-Компилятор определяет условие по имени параметра. Открытый вопрос: `Port` как отдельный тип вместо `Int` — точнее сигнализирует компилятору.
+Скрипт — это неявный `lives` без `born` и `dies`. Компилятор генерирует `fn main()`.
 
 ### Ограничение
 

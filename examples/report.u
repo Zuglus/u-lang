@@ -1,11 +1,15 @@
-// report.u — скрипт обработки данных
+// report.u — одноразовая задача: отчёт по зарплатам
 
-data = parse_csv(read_file("workers.csv")?)
-
-by_dept = data
-    .group_by(fn(row) row.string("department"))
-    .map_values(fn(rows) rows.avg(fn(r) r.float("salary")))
-
-for (dept, avg) in by_dept
-    print("$dept: средняя зарплата $(avg.round(2))")
+struct Report
+    born: file: String
+    lives
+        data = parse_csv(file)
+        by_dept = data.group_by(row => row.department)
+        for dept, rows in by_dept
+            avg = rows.avg(r => r.salary)
+            print("$dept: средняя зарплата $(avg.round(2))")
+        end
+    dies
 end
+
+Report("workers.csv").run()
