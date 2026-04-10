@@ -1,7 +1,0 @@
-fn do_work()
-    print("Working")
-end
-
-spawn(fn() do_work())
-
-print("Main")

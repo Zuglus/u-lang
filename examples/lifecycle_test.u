@@ -1,9 +1,0 @@
-struct Server
-    born: port: Int
-    lives
-        print("listening...")
-        sleep(1000)
-    dies: print("server closed")
-end
-
-Server.new(8080).run()

@@ -1,6 +1,0 @@
-// Ошибка: несуществующая переменная
-fn greet(name)
-    print("Hello, $unknown_var")
-end
-
-greet("world")

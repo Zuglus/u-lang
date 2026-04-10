@@ -1,9 +1,0 @@
-// helpers.u — вспомогательные функции
-
-pub fn greet(name: String)
-    print("Привет, $name!")
-end
-
-pub fn farewell(name: String)
-    print("Пока, $name!")
-end

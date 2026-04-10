@@ -1,7 +1,0 @@
-// Ошибка: несоответствие типов
-fn add(a, b)
-    return a + b
-end
-
-x = add(1, "hello")
-print(x)
