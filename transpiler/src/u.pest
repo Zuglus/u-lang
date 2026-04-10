@@ -145,8 +145,8 @@ expression_entry = { SOI ~ expression ~ EOI }
 
 // Atoms
 identifier   = @{ !keyword ~ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_")* }
-keyword      = _{ ("if" | "elif" | "else" | "end" | "for" | "while" | "fn" | "return"
-                 | "true" | "false" | "and" | "or" | "not" | "in" | "match" | "struct"
+keyword      = _{ ("if" | "elif" | "else" | "end" | "for" | "while" | "fn" | "process" | "return"
+                 | "true" | "false" | "and" | "or" | "not" | "in" | "match" | "struct" | "thing"
                  | "enum" | "trait" | "impl" | "use" | "memory" | "pub" | "unsafe"
                  | "weak" | "test" | "spawn" | "loop" | "pass" | "mut" | "break"
                  | "continue" | "none") ~ !(LETTER | ASCII_DIGIT | "_") }
@@ -154,7 +154,7 @@ bool_literal = @{ ("true" | "false") ~ !(LETTER | ASCII_DIGIT | "_") }
 number       = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 
 // Keyword terminals (atomic to prevent WHITESPACE between keyword and boundary check)
-fn_kw     = @{ "fn" ~ !(LETTER | ASCII_DIGIT | "_") }
+fn_kw     = @{ ("fn" | "process") ~ !(LETTER | ASCII_DIGIT | "_") }
 for_kw    = @{ "for" ~ !(LETTER | ASCII_DIGIT | "_") }
 in_kw     = @{ "in" ~ !(LETTER | ASCII_DIGIT | "_") }
 if_kw     = @{ "if" ~ !(LETTER | ASCII_DIGIT | "_") }
